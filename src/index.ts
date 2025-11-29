@@ -9,7 +9,7 @@ import { LoggerFactory } from '@/logger';
 import { EventManager } from 'gugle-event';
 import { PrivateMessageWSMSG, SentMessage, TextMessage, WSMSG } from '@/type';
 import axios, { AxiosInstance } from 'axios';
-import { Github } from '@/github/index';
+import { Github } from '@/github';
 
 export class QQBot {
   private path: string = process.cwd();
