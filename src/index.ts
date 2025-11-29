@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import dayjs from 'dayjs';
 import { LoggerFactory } from '@/logger';
 import { EventManager } from 'gugle-event';
-import { PrivateMessageWSMSG, SentMessage, TextMessage, WSMSG } from '@/type';
+import { GroupMessageWSMSG, PrivateMessageWSMSG, SentMessage, TextMessage, WSMSG } from '@/type';
 import axios, { AxiosInstance } from 'axios';
 import { Github } from '@/github';
 
@@ -166,7 +166,31 @@ function listenPrivateMsg(bot: QQBot, msg: PrivateMessageWSMSG) {
     if (message.type != 'text') return;
     sentMessage.push(message);
   });
-  if (!!sentMessage) bot.sendPrivateMsg(msg.user_id, sentMessage);
+  if (!!sentMessage) bot.sendPrivateMsg(msg.sender.user_id, sentMessage);
+}
+
+function listenGroupMsg(bot: QQBot, msg: GroupMessageWSMSG) {
+  if (msg.raw_message != '/测试') return;
+  bot.sendGroupMsg(msg.group_id, [
+    {
+      type: 'reply',
+      data: {
+        id: msg.message_id
+      }
+    },
+    {
+      type: 'at',
+      data: {
+        qq: msg.sender.user_id
+      }
+    },
+    {
+      type: 'text',
+      data: {
+        text: '测试成功'
+      }
+    }
+  ]);
 }
 
 export const bot = new QQBot({
@@ -174,7 +198,8 @@ export const bot = new QQBot({
   httpToken: '',
   logLevel: 'debug',
   events: {
-    'message-event-private': listenPrivateMsg
+    'message-event-private': listenPrivateMsg,
+    'message-event-group': listenGroupMsg
   }
 });
 
