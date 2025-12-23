@@ -1,5 +1,6 @@
 // 导入winston库中的createLogger、Logger、transports和format模块，以及dayjs库
-import { createLogger, Logger, transports, format } from 'winston';
+import { createLogger, format, Logger, transports } from 'winston';
+import 'winston-daily-rotate-file';
 import dayjs from 'dayjs';
 
 // 定义LoggerFactory类
@@ -17,34 +18,37 @@ export class LoggerFactory {
     path: string = process.cwd(),
     logLevel: 'debug' | 'info' | 'warn' | 'error' = 'info'
   ): Logger {
+    // 配置文件日志输出
+    const dailyRotateFile = new transports.DailyRotateFile({
+      // 指定日志文件的名称和路径
+      filename: `%DATE%.log`,
+      dirname: path,
+      datePattern: 'YYYY-MM-DD',
+      // 使用自定义打印格式
+      format: format.printf(
+        info => `[${dayjs().format('YYYY-MM-DD HH:mm:ss')}]${name ? `[${name}]` : ''}[${info.level}] ${info.message}`
+      ),
+      maxSize: '16k',
+      zippedArchive: true
+    });
+
+    // 配置控制台日志输出
+    const console = new transports.Console({
+      // 结合颜色格式化和自定义打印格式
+      format: format.combine(
+        format.colorize(),
+        format.printf(
+          info => `[${dayjs().format('YYYY-MM-DD HH:mm:ss')}]${name ? `[${name}]` : ''}[${info.level}] ${info.message}`
+        )
+      )
+    });
+
     // 使用winston的createLogger方法创建并返回一个Logger实例
     return createLogger({
       // 设置日志级别
       level: logLevel,
       // 配置日志传输（输出）的方式，包括控制台和文件
-      transports: [
-        // 配置控制台日志输出
-        new transports.Console({
-          // 结合颜色格式化和自定义打印格式
-          format: format.combine(
-            format.colorize(),
-            format.printf(
-              info =>
-                `[${dayjs().format('YYYY-MM-DD HH:mm:ss')}]${name ? `[${name}]` : ''}[${info.level}] ${info.message}`
-            )
-          )
-        }),
-        // 配置文件日志输出
-        new transports.File({
-          // 指定日志文件的名称和路径
-          filename: `${path}/latest.log`,
-          // 使用自定义打印格式
-          format: format.printf(
-            info =>
-              `[${dayjs().format('YYYY-MM-DD HH:mm:ss')}]${name ? `[${name}]` : ''}[${info.level}] ${info.message}`
-          )
-        })
-      ]
+      transports: [console, dailyRotateFile]
     });
   }
 }
