@@ -160,61 +160,6 @@ export class QQBot {
   }
 }
 
-function listenPrivateMsg(bot: QQBot, msg: PrivateMessageWSMSG) {
-  const receivedMessage: TextMessage[] = [];
-  msg.message.forEach(message => {
-    if (message.type != 'text') return;
-    receivedMessage.push(message);
-  });
-  const bracketPairs: Record<string, string> = {
-    '（': '）',
-    '【': '】',
-    '(': ')',
-    '[': ']',
-    '{': '}'
-  };
-  const closingBrackets = new Set(['）', '】', ')', ']', '}']);
-  const reversePairs: Record<string, string> = {
-    '）': '（',
-    '】': '【',
-    ')': '(',
-    ']': '[',
-    '}': '{'
-  };
-  const stack: string[] = [];
-  const strMsg = receivedMessage.map(msg => msg.data.text).join(' ');
-  for (const char of strMsg) {
-    if (bracketPairs[char]) {
-      stack.push(char);
-    } else if (closingBrackets.has(char)) {
-      const expected = reversePairs[char];
-      if (stack.length > 0 && stack[stack.length - 1] === expected) {
-        stack.pop();
-      }
-    }
-  }
-  let result = '';
-  while (stack.length > 0) {
-    const leftBracket = stack.pop()!;
-    result += bracketPairs[leftBracket];
-  }
-  const sentMessage: Message[] = [
-    {
-      type: 'reply',
-      data: {
-        id: msg.message_id
-      }
-    },
-    {
-      type: 'text',
-      data: {
-        text: result
-      }
-    }
-  ];
-  if (!!sentMessage) bot.sendPrivateMsg(msg.sender.user_id, sentMessage);
-}
-
 function listenGroupMsg(bot: QQBot, msg: GroupMessageWSMSG) {
   if (msg.group_id != 659356928) return;
   const receivedMessage: TextMessage[] = [];
@@ -227,15 +172,21 @@ function listenGroupMsg(bot: QQBot, msg: GroupMessageWSMSG) {
     '【': '】',
     '(': ')',
     '[': ']',
-    '{': '}'
+    '{': '}',
+    '<': '>',
+    '“': '”',
+    '《': '》'
   };
-  const closingBrackets = new Set(['）', '】', ')', ']', '}']);
+  const closingBrackets = new Set(['）', '】', ')', ']', '}', '>', '”','》']);
   const reversePairs: Record<string, string> = {
     '）': '（',
     '】': '【',
     ')': '(',
     ']': '[',
-    '}': '{'
+    '}': '{',
+    '>': '<',
+    '”': '“',
+    '》': '《'
   };
   const stack: string[] = [];
   const strMsg = receivedMessage.map(msg => msg.data.text).join(' ');
@@ -277,7 +228,6 @@ export const bot = new QQBot({
   httpToken: '',
   logLevel: 'debug',
   events: {
-    'message-event-private': listenPrivateMsg,
     'message-event-group': listenGroupMsg
   }
 });
