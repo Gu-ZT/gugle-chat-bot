@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import dayjs from 'dayjs';
 import { LoggerFactory } from '@/logger';
 import { EventManager } from 'gugle-event';
-import { GroupMessageWSMSG, PrivateMessageWSMSG, SentMessage, TextMessage, WSMSG } from '@/type';
+import { GroupMessageWSMSG, Message, PrivateMessageWSMSG, SentMessage, TextMessage, WSMSG } from '@/type';
 import axios, { AxiosInstance } from 'axios';
 import { Github } from '@/github';
 
@@ -161,17 +161,44 @@ export class QQBot {
 }
 
 function listenPrivateMsg(bot: QQBot, msg: PrivateMessageWSMSG) {
-  const sentMessage: TextMessage[] = [];
+  const receivedMessage: TextMessage[] = [];
   msg.message.forEach(message => {
     if (message.type != 'text') return;
-    sentMessage.push(message);
+    receivedMessage.push(message);
   });
-  if (!!sentMessage) bot.sendPrivateMsg(msg.sender.user_id, sentMessage);
-}
-
-function listenGroupMsg(bot: QQBot, msg: GroupMessageWSMSG) {
-  if (msg.raw_message != '/测试') return;
-  bot.sendGroupMsg(msg.group_id, [
+  const bracketPairs: Record<string, string> = {
+    '（': '）',
+    '【': '】',
+    '(': ')',
+    '[': ']',
+    '{': '}'
+  };
+  const closingBrackets = new Set(['）', '】', ')', ']', '}']);
+  const reversePairs: Record<string, string> = {
+    '）': '（',
+    '】': '【',
+    ')': '(',
+    ']': '[',
+    '}': '{'
+  };
+  const stack: string[] = [];
+  const strMsg = receivedMessage.map(msg => msg.data.text).join(' ');
+  for (const char of strMsg) {
+    if (bracketPairs[char]) {
+      stack.push(char);
+    } else if (closingBrackets.has(char)) {
+      const expected = reversePairs[char];
+      if (stack.length > 0 && stack[stack.length - 1] === expected) {
+        stack.pop();
+      }
+    }
+  }
+  let result = '';
+  while (stack.length > 0) {
+    const leftBracket = stack.pop()!;
+    result += bracketPairs[leftBracket];
+  }
+  const sentMessage: Message[] = [
     {
       type: 'reply',
       data: {
@@ -179,18 +206,70 @@ function listenGroupMsg(bot: QQBot, msg: GroupMessageWSMSG) {
       }
     },
     {
-      type: 'at',
+      type: 'text',
       data: {
-        qq: msg.sender.user_id
+        text: result
+      }
+    }
+  ];
+  if (!!sentMessage) bot.sendPrivateMsg(msg.sender.user_id, sentMessage);
+}
+
+function listenGroupMsg(bot: QQBot, msg: GroupMessageWSMSG) {
+  if (msg.group_id != 659356928) return;
+  const receivedMessage: TextMessage[] = [];
+  msg.message.forEach(message => {
+    if (message.type != 'text') return;
+    receivedMessage.push(message);
+  });
+  const bracketPairs: Record<string, string> = {
+    '（': '）',
+    '【': '】',
+    '(': ')',
+    '[': ']',
+    '{': '}'
+  };
+  const closingBrackets = new Set(['）', '】', ')', ']', '}']);
+  const reversePairs: Record<string, string> = {
+    '）': '（',
+    '】': '【',
+    ')': '(',
+    ']': '[',
+    '}': '{'
+  };
+  const stack: string[] = [];
+  const strMsg = receivedMessage.map(msg => msg.data.text).join(' ');
+  for (const char of strMsg) {
+    if (bracketPairs[char]) {
+      stack.push(char);
+    } else if (closingBrackets.has(char)) {
+      const expected = reversePairs[char];
+      if (stack.length > 0 && stack[stack.length - 1] === expected) {
+        stack.pop();
+      }
+    }
+  }
+  let result = '';
+  while (stack.length > 0) {
+    const leftBracket = stack.pop()!;
+    result += bracketPairs[leftBracket];
+  }
+  if(result.trim().length == 0) return;
+  const sentMessage: Message[] = [
+    {
+      type: 'reply',
+      data: {
+        id: msg.message_id
       }
     },
     {
       type: 'text',
       data: {
-        text: '测试成功'
+        text: result
       }
     }
-  ]);
+  ];
+  if (!!sentMessage) bot.sendGroupMsg(msg.group_id, sentMessage);
 }
 
 export const bot = new QQBot({
