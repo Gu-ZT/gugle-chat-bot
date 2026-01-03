@@ -15,11 +15,13 @@ export function parenthesesMatching(bot: QQBot, msg: GroupMessageWSMSG) {
     '<': '>',
     '"': '"',
     '“': '”',
+    '‘': '’',
     '（': '）',
     '【': '】',
-    '《': '》'
+    '《': '》',
+    '「': '」'
   };
-  const closingBrackets = new Set([')', ']', '}', '>', '"', '”', '）', '】', '》']);
+  const closingBrackets = new Set([')', ']', '}', '>', '"', '”', '’', '）', '】', '》', '」']);
 
   const bracketTypeMap: Record<string, string> = {
     '（': 'paren',
@@ -37,8 +39,11 @@ export function parenthesesMatching(bot: QQBot, msg: GroupMessageWSMSG) {
     '"': 'quote',
     '“': 'quote',
     '”': 'quote',
+    '’': 'quote',
     '《': 'book',
-    '》': 'book'
+    '》': 'book',
+    '「': 'quote',
+    '」': 'quote'
   };
 
   const reversePairs: Record<string, string> = {
@@ -48,9 +53,11 @@ export function parenthesesMatching(bot: QQBot, msg: GroupMessageWSMSG) {
     '>': '<',
     '"': '"',
     '”': '“',
+    '’': '‘',
     '）': '（',
     '】': '【',
-    '》': '《'
+    '》': '《',
+    '」': '「'
   };
   const stack: { char: string; position: number }[] = [];
   const strMsg = receivedMessage.map(msg => msg.data.text).join(' ');
