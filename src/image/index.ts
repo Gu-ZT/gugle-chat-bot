@@ -1,9 +1,9 @@
 import nodeHtmlToImage from 'node-html-to-image';
 import fs from 'node:fs';
 import { IssueEvent } from '@/type/github';
+import Constants from '@/constants';
 
 class Template {
-  private readonly self = this;
   private readonly templateName: string;
   private processor: ((template: string) => string)[] = [];
 
@@ -108,7 +108,7 @@ function issuesHandler(operation: string, issue: IssueEvent, extra?: string) {
         nodeHtmlToImage({
           html: issue,
           puppeteerArgs: {
-            executablePath: 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+            executablePath: Constants.CHROME_PATH,
             defaultViewport: {
               width: 1800,
               height: 1
