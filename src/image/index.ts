@@ -15,7 +15,6 @@ import {
 } from '@/type/github';
 import Constants from '@/constants';
 import { Logger } from 'winston';
-import axios from 'axios';
 
 class Template {
   private readonly templateName: string;
@@ -65,6 +64,18 @@ function imageToBase64(image: Buffer<ArrayBufferLike>) {
   return image.toString('base64');
 }
 
+function getIssueState(issue: Issue) {
+  if (issue.state == 'open') {
+    return `<svg focusable="false" aria-label="Issue" class="octicon octicon-issue-opened prc-StateLabel-Icon-YICrR" role="img" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"></path></svg><div class="label" style="background-color: #347D3955; border:2px solid #347D3999">Open</div>\n`;
+  } else {
+    if (issue.state_reason == 'completed') {
+      return `<svg focusable="false" aria-label="Issue" class="octicon octicon-issue-closed prc-StateLabel-Icon-YICrR" role="img" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M11.28 6.78a.75.75 0 0 0-1.06-1.06L7.25 8.69 5.78 7.22a.75.75 0 0 0-1.06 1.06l2 2a.75.75 0 0 0 1.06 0l3.5-3.5Z"></path><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0Zm-1.5 0a6.5 6.5 0 1 0-13 0 6.5 6.5 0 0 0 13 0Z"></path></svg><div class="label" style="background-color: #8256D055; border:2px solid #8256D099">Closed</div>\n`;
+    } else {
+      return `<div class="label" style="background-color: #656C7655; border:2px solid #656C7699"><svg focusable="false" aria-label="Issue, not planned" class="octicon octicon-skip prc-StateLabel-Icon-YICrR" role="img" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align: text-bottom;"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm9.78-2.22-5.5 5.5a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734l5.5-5.5a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Z"></path></svg>Closed</div>\n`;
+    }
+  }
+}
+
 function getIssuesType(issue: Issue): 'bug' | 'TODO' | 'enhancement' | undefined {
   for (const issueLabel of issue.labels) {
     const issueLabelName = issueLabel.name as string;
@@ -78,7 +89,7 @@ function getIssuesType(issue: Issue): 'bug' | 'TODO' | 'enhancement' | undefined
 function issuesHandler(issue: Issue, logger?: Logger, operation?: string, sender?: User, extra?: string) {
   const type = getIssuesType(issue);
   let issueBody = '';
-  const bodies: string[] = issue.body.split('\n');
+  const bodies: string[] = (issue.body || '').split('\n');
   let start = false;
   for (let body of bodies) {
     if (!body.trim()) continue;
@@ -115,6 +126,7 @@ function issuesHandler(issue: Issue, logger?: Logger, operation?: string, sender
     Template.load('issue')
       .arg('header extra', headerExtra || '')
       .arg('issue number', issue.number)
+      .arg('state label', getIssueState(issue))
       .arg('issue title', issue.title)
       .arg('issue body', issueBody)
       .arg('labels', labelsHtml)
@@ -122,7 +134,7 @@ function issuesHandler(issue: Issue, logger?: Logger, operation?: string, sender
       .handler()
       .then(issue => {
         logger?.debug(`Start process issue message...`);
-        tryGenerateImage(resolve, reject, issue)
+        tryGenerateImage(resolve, reject, issue);
       })
       .catch(reject);
   });
@@ -157,7 +169,7 @@ function issuesOpened(issue: OpenedIssueEvent | ReopenedIssueEvent, logger?: Log
 
 function prHandler(pr: PullRequest, logger?: Logger, operation?: string, sender?: User, extra?: string) {
   let prBody = '';
-  const bodies: string[] = (pr.body || "<i>No description provided.</i>").split('\n');
+  const bodies: string[] = (pr.body || '<i>No description provided.</i>').split('\n');
   for (let body of bodies) {
     if (!body.trim()) continue;
     if (body.startsWith('### ')) {
@@ -185,7 +197,7 @@ function prHandler(pr: PullRequest, logger?: Logger, operation?: string, sender?
       .handler()
       .then(pr => {
         logger?.debug(`Start process pull request message...`);
-        tryGenerateImage(resolve, reject, pr)
+        tryGenerateImage(resolve, reject, pr);
       })
       .catch(reject);
   });
@@ -249,7 +261,11 @@ export class GitHubImage {
   }
 }
 
-function tryGenerateImage(resolve: (value: string | PromiseLike<string>) => void, reject: (reason?: any) => void, html: string) {
+function tryGenerateImage(
+  resolve: (value: string | PromiseLike<string>) => void,
+  reject: (reason?: any) => void,
+  html: string
+) {
   try {
     nodeHtmlToImage({
       html: html,
@@ -274,13 +290,13 @@ function tryGenerateImage(resolve: (value: string | PromiseLike<string>) => void
       timeout: 60000,
       waitUntil: 'domcontentloaded'
     })
-    .then(image => {
-      // const outputPath = path.join(process.cwd(), 'output.png');
-      // fs.writeFileSync(outputPath, image as Buffer);
-      // console.log(`图片已保存到: ${outputPath}`);
-      resolve(imageToBase64(image as Buffer));
-    })
-    .catch(reject);
+      .then(image => {
+        // const outputPath = path.join(process.cwd(), 'output.png');
+        // fs.writeFileSync(outputPath, image as Buffer);
+        // console.log(`图片已保存到: ${outputPath}`);
+        resolve(imageToBase64(image as Buffer));
+      })
+      .catch(reject);
   } catch (e) {
     reject(e);
   }

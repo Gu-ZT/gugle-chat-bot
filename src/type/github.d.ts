@@ -16,13 +16,16 @@ export interface Label {
 }
 
 export type State = 'open' | 'closed';
+
+export type IssueStateReason = 'completed' | 'duplicate' | 'not_planned' | string;
+
 export interface Issue {
   title: string | number;
   number: number;
-  body: string;
+  body?: string;
   assignee?: User;
   state: State;
-  state_reason?: string;
+  state_reason?: IssueStateReason;
   milestone?: Milestone;
   labels: Label[];
   assignees?: User[];
