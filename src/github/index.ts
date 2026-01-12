@@ -22,13 +22,17 @@ export class Github {
           body += chunk.toString(); // 将数据块拼接成字符串
         });
         req.on('end', () => {
-          const event = (req.headers['x-github-event'] as string) || '';
-          body = JSON.parse(body);
-          bot.logger?.debug(`Receive Github Event: github-${event}`);
-          this.post(`github-${event}`, bot, body);
-          res.statusCode = 202;
-          res.setHeader('Content-Type', 'text/plain');
-          res.end('Accepted');
+          try {
+            const event = (req.headers['x-github-event'] as string) || '';
+            body = JSON.parse(body);
+            bot.logger?.debug(`Receive Github Event: github-${event}`);
+            this.post(`github-${event}`, bot, body);
+            res.statusCode = 202;
+            res.setHeader('Content-Type', 'text/plain');
+            res.end('Accepted');
+          } catch (e) {
+            bot.logger?.error(e);
+          }
         });
         return;
       }
