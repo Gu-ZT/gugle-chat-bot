@@ -95,7 +95,7 @@ function issuesHandler(operation: string, issue: IssueEvent, extra?: string) {
   }
   return new Promise<string>((resolve, reject) => {
     Template.load('issue')
-      .arg('issue user', issue.issue.user.login)
+      .arg('issue user', issue.sender.login)
       .arg('issue number', issue.issue.number)
       .arg('issue title', issue.issue.title)
       .arg('issue body', issueBody)
@@ -112,7 +112,8 @@ function issuesHandler(operation: string, issue: IssueEvent, extra?: string) {
             defaultViewport: {
               width: 1800,
               height: 1
-            }
+            },
+            timeout: 300000
           },
           type: 'png'
         })

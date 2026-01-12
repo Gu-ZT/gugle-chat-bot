@@ -50,16 +50,20 @@ export class Github {
     } else if (msg.action === 'closed') {
       promise = GitHubImage.issuesClosed(msg);
     }
-    promise?.then(base64 => {
-      bot.sendGroupMsg(475133231, [
-        {
-          type: 'image',
-          data: {
-            file: `data:image/png;base64, ${base64}`
+    promise
+      ?.then(base64 => {
+        bot.sendGroupMsg(475133231, [
+          {
+            type: 'image',
+            data: {
+              file: `data:image/png;base64, ${base64}`
+            }
           }
-        }
-      ]);
-    });
+        ]);
+      })
+      .catch(e => {
+        this.logger?.error(e);
+      });
   }
 
   public async post(event: string, ...args: any): Promise<any[]> {
