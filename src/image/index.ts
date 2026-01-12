@@ -287,7 +287,7 @@ function prHandler(pr: PullRequest, logger?: Logger, operation?: string, sender?
   }
   let labelsHtml = '';
   for (let label of pr.labels) {
-    labelsHtml += `<div class="label" style="background-color: #${label.color}55; border:2px solid #${label.color}99">${label.name}</div>\n`;
+    labelsHtml += `<div class="label" style="color:#${label.color}ff; background-color: #${label.color}55; border:2px solid #${label.color}99">${label.name}</div>\n`;
   }
   let headerExtra: string | undefined = undefined;
   if (sender) {
