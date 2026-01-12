@@ -134,6 +134,7 @@ export class Github {
                     reject(e);
                   });
               })
+            return;
           }
           GitHubImage.issuesHandler(data as Issue, bot.logger)
             .then(data => {
