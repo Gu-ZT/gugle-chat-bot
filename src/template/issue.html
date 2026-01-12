@@ -1,0 +1,63 @@
+<body>
+<div class="container">
+    <div class="message">
+        用户
+        <div class="user">
+            {{issue user}}
+        </div>
+        {{operation}}了 Issue
+        <div class="number">
+            #{{issue number}}
+        </div>
+    </div>
+    {{extra}}
+    <div class="title">
+        {{issue title}}
+    </div>
+    {{labels}}
+    <div class="content">
+        {{issue body}}
+    </div>
+</div>
+</body>
+<style>
+    .container {
+        margin: 16px;
+    }
+    .user {
+        display: inline-block;
+        font-weight: bold;
+    }
+    .number {
+        display: inline-block;
+        font-weight: bold;
+    }
+    .message {
+        display: inline-block;
+        font-size: 20px;
+        margin-bottom: 10px;
+    }
+    .title {
+        display: inline-block;
+        font-size: 24px;
+        font-weight: bold;
+        margin-bottom: 10px;
+    }
+    .label {
+        display: inline-block;
+        font-size: 20px;
+        font-weight: bold;
+        text-align: center;
+        margin-bottom: 10px;
+        padding: 0 15px;
+        border-radius: 9999px;
+    }
+    .h1 {
+        font-size: 16px;
+        font-weight: bold;
+    }
+    .body {
+        margin-left: 15px;
+        font-size: 14px;
+    }
+</style>

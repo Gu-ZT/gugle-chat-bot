@@ -3,6 +3,7 @@ import { Logger } from 'winston';
 import http from 'node:http';
 import { QQBot } from '@/index';
 import { AllIssueEvent } from '@/type/github';
+import { GitHubImage } from '@/image';
 
 export class Github {
   private readonly bot: QQBot;
@@ -43,22 +44,22 @@ export class Github {
   }
 
   private listenIssueEvent(bot: QQBot, msg: AllIssueEvent) {
+    let promise: Promise<string> | undefined = undefined;
     if (msg.action === 'opened') {
-      bot.sendPrivateMsg(2308465862, [
+      promise = GitHubImage.issuesOpened(msg);
+    } else if (msg.action === 'closed') {
+      promise = GitHubImage.issuesClosed(msg);
+    }
+    promise?.then(base64 => {
+      bot.sendGroupMsg(475133231, [
         {
-          type: 'text',
+          type: 'image',
           data: {
-            text:
-              '有新的 Issue \n' +
-              '\n' +
-              `🐛 Issue #${msg.issue.number}\n` +
-              `📌 ${msg.issue.title}\n` +
-              `${msg.issue.user.name}` +
-              `🔗 ${msg.issue.user.html_url}`
+            file: `data:image/png;base64, ${base64}`
           }
         }
       ]);
-    }
+    });
   }
 
   public async post(event: string, ...args: any): Promise<any[]> {

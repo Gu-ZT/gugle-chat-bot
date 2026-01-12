@@ -125,11 +125,11 @@ export class QQBot {
     bot.logger?.debug(`Received message: ${JSON.stringify(msg)}`);
     if (msg.post_type == 'meta_event') {
       bot.logger?.debug(`post meta event: meta-event-${msg.meta_event_type}`);
-      bot.post(`meta-event-${msg.meta_event_type}`, bot, msg);
+      bot.post(`meta-event-${msg.meta_event_type}`, bot, msg).then();
     }
     if (msg.post_type == 'message') {
       bot.logger?.debug(`post message event: message-event-${msg.message_type}`);
-      bot.post(`message-event-${msg.message_type}`, bot, msg);
+      bot.post(`message-event-${msg.message_type}`, bot, msg).then();
     }
   }
 
@@ -146,7 +146,7 @@ export class QQBot {
       bot.AXIOS.post(`/send_private_msg`, {
         user_id: userID,
         message: message
-      });
+      }).then()
     });
   }
 
@@ -156,7 +156,7 @@ export class QQBot {
       bot.AXIOS.post(`/send_group_msg`, {
         group_id: userID,
         message: message
-      });
+      }).then();
     });
   }
 }
