@@ -33,7 +33,7 @@ export interface Issue {
 export interface PullRequest {
   title: string | number;
   number: number;
-  body: string;
+  body?: string;
   requested_reviewers?: User;
   assignee?: User;
   state: State;

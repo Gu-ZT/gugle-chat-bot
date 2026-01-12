@@ -157,7 +157,7 @@ function issuesOpened(issue: OpenedIssueEvent | ReopenedIssueEvent, logger?: Log
 
 function prHandler(pr: PullRequest, logger?: Logger, operation?: string, sender?: User, extra?: string) {
   let prBody = '';
-  const bodies: string[] = pr.body.split('\n');
+  const bodies: string[] = (pr.body || "<i>No description provided.</i>").split('\n');
   for (let body of bodies) {
     if (!body.trim()) continue;
     if (body.startsWith('### ')) {
