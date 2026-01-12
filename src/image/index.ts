@@ -107,26 +107,30 @@ function issuesHandler(operation: string, issue: IssueEvent, logger?: Logger, ex
       .then(issue => {
         logger?.debug(`Start process issue message...`);
         // console.log(issue);
-        nodeHtmlToImage({
-          html: issue,
-          puppeteerArgs: {
-            executablePath: Constants.CHROME_PATH,
-            defaultViewport: {
-              width: 1800,
-              height: 1
+        try {
+          nodeHtmlToImage({
+            html: issue,
+            puppeteerArgs: {
+              executablePath: Constants.CHROME_PATH,
+              defaultViewport: {
+                width: 1800,
+                height: 1
+              },
+              timeout: 600000
             },
-            timeout: 300000
-          },
-          type: 'png',
-          timeout: 300000
-        })
-          .then(image => {
-            // const outputPath = path.join(process.cwd(), 'output.png');
-            // fs.writeFileSync(outputPath, image as Buffer);
-            // console.log(`图片已保存到: ${outputPath}`);
-            resolve(imageToBase64(image as Buffer));
+            type: 'png',
+            timeout: 600000
           })
-          .catch(reject);
+            .then(image => {
+              // const outputPath = path.join(process.cwd(), 'output.png');
+              // fs.writeFileSync(outputPath, image as Buffer);
+              // console.log(`图片已保存到: ${outputPath}`);
+              resolve(imageToBase64(image as Buffer));
+            })
+            .catch(reject);
+        } catch (e) {
+          reject(e);
+        }
       })
       .catch(reject);
   });
