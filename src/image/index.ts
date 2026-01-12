@@ -1,6 +1,6 @@
 import nodeHtmlToImage from 'node-html-to-image';
 import fs from 'node:fs';
-import { IssueEvent } from '@/type/github';
+import { Issue, IssueEvent, User } from '@/type/github';
 import Constants from '@/constants';
 import { Logger } from 'winston';
 
@@ -52,8 +52,8 @@ function imageToBase64(image: Buffer<ArrayBufferLike>) {
   return image.toString('base64');
 }
 
-function getIssuesType(issue: IssueEvent): 'bug' | 'TODO' | 'enhancement' | undefined {
-  for (const issueLabel of issue.issue.labels) {
+function getIssuesType(issue: Issue): 'bug' | 'TODO' | 'enhancement' | undefined {
+  for (const issueLabel of issue.labels) {
     const issueLabelName = issueLabel.name as string;
     if (issueLabelName.endsWith('bug') || issueLabelName.endsWith('TODO') || issueLabelName.endsWith('enhancement')) {
       return issueLabelName.endsWith('bug') ? 'bug' : issueLabelName.endsWith('TODO') ? 'TODO' : 'enhancement';
@@ -62,10 +62,10 @@ function getIssuesType(issue: IssueEvent): 'bug' | 'TODO' | 'enhancement' | unde
   return undefined;
 }
 
-function issuesHandler(operation: string, issue: IssueEvent, logger?: Logger, extra?: string) {
+function issuesHandler(issue: Issue, logger?: Logger, operation?: string, sender?: User, extra?: string) {
   const type = getIssuesType(issue);
   let issueBody = '';
-  const bodies: string[] = issue.issue.body.split('\n');
+  const bodies: string[] = issue.body.split('\n');
   let start = false;
   for (let body of bodies) {
     if (!body.trim()) continue;
@@ -81,10 +81,7 @@ function issuesHandler(operation: string, issue: IssueEvent, logger?: Logger, ex
       }
     }
     if (!start) continue;
-    if (
-      body.startsWith('### Checks')
-      || body.startsWith('### This issue is unique')
-    ) {
+    if (body.startsWith('### Checks') || body.startsWith('### This issue is unique')) {
       break;
     }
     if (body.startsWith('### ')) {
@@ -94,14 +91,18 @@ function issuesHandler(operation: string, issue: IssueEvent, logger?: Logger, ex
     }
   }
   let labelsHtml = '';
-  for (let label of issue.issue.labels) {
+  for (let label of issue.labels) {
     labelsHtml += `<div class="label" style="background-color: #${label.color}55; border:2px solid #${label.color}99">${label.name}</div>\n`;
+  }
+  let headerExtra: string | undefined = undefined;
+  if (sender) {
+    headerExtra = `<div class="message">用户<div class="user">${sender.login}</div>${operation}了 </div>`;
   }
   return new Promise<string>((resolve, reject) => {
     Template.load('issue')
-      .arg('issue user', issue.sender.login)
-      .arg('issue number', issue.issue.number)
-      .arg('issue title', issue.issue.title)
+      .arg('header extra', headerExtra || '')
+      .arg('issue number', issue.number)
+      .arg('issue title', issue.title)
       .arg('issue body', issueBody)
       .arg('labels', labelsHtml)
       .arg('operation', operation)
@@ -109,7 +110,6 @@ function issuesHandler(operation: string, issue: IssueEvent, logger?: Logger, ex
       .handler()
       .then(issue => {
         logger?.debug(`Start process issue message...`);
-        // console.log(issue);
         try {
           nodeHtmlToImage({
             html: issue,
@@ -163,14 +163,24 @@ function issuesClosed(issue: IssueEvent, logger?: Logger): Promise<string> {
   } else {
     extra += `<div class='body'>${issue.issue.state_reason}</div>\n`;
   }
-  return issuesHandler('关闭', issue, logger, extra);
+  return issuesHandler(issue.issue, logger, '关闭', issue.sender, extra);
 }
 
 function issuesOpened(issue: IssueEvent, logger?: Logger): Promise<string> {
-  return issuesHandler('提交', issue, logger);
+  return issuesHandler(issue.issue, logger, '提交', issue.sender);
 }
 
 export class GitHubImage {
+  public static issuesHandler(
+    issue: Issue,
+    logger?: Logger,
+    operation?: string,
+    sender?: User,
+    extra?: string
+  ): Promise<string> {
+    return issuesHandler(issue, logger, operation, sender, extra);
+  }
+
   public static issuesOpened(issue: IssueEvent, logger?: Logger): Promise<string> {
     return issuesOpened(issue, logger);
   }

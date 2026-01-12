@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import dayjs from 'dayjs';
 import { LoggerFactory } from '@/logger';
 import { EventManager } from 'gugle-event';
-import { GroupMessageWSMSG, SentMessage, WSMSG } from '@/type';
+import { GroupMessageWSMSG, Message, SentMessage, WSMSG } from '@/type';
 import axios, { AxiosInstance } from 'axios';
 import { Github } from '@/github';
 import { ParenthesesMatching } from '@/func/ParenthesesMatching';
@@ -16,7 +16,7 @@ export class QQBot {
   private path: string = process.cwd();
   logger?: Logger;
   private readonly config: BotConfig;
-  private readonly AXIOS: AxiosInstance;
+  public readonly axiosInstance: AxiosInstance;
   private readonly ws: WebSocket;
   private readonly eventManager: EventManager;
   private wsOpened: boolean = false;
@@ -28,7 +28,7 @@ export class QQBot {
     this.config = config;
     this.eventManager = new EventManager();
     this.ws = new WebSocket(`${Constants.WS_URL}/${Constants.TOKEN_PARAMS}${config.wsToken}`);
-    this.AXIOS = axios.create({
+    this.axiosInstance = axios.create({
       timeout: 15000,
       baseURL: Constants.HTTP_URL,
       headers: {
@@ -143,26 +143,43 @@ export class QQBot {
   public sendPrivateMsg(userID: string | number, message: SentMessage) {
     const bot = this;
     this.operationQueue.push(() => {
-      bot.AXIOS.post(`/send_private_msg`, {
-        user_id: userID,
-        message: message
-      }).then()
+      bot.axiosInstance
+        .post(`/send_private_msg`, {
+          user_id: userID,
+          message: message
+        })
+        .then();
     });
   }
 
   public sendGroupMsg(userID: string | number, message: SentMessage) {
     const bot = this;
     this.operationQueue.push(() => {
-      bot.AXIOS.post(`/send_group_msg`, {
-        group_id: userID,
-        message: message
-      }).then();
+      bot.axiosInstance
+        .post(`/send_group_msg`, {
+          group_id: userID,
+          message: message
+        })
+        .then();
     });
   }
 }
 
 function listenGroupMsg(bot: QQBot, msg: GroupMessageWSMSG) {
-  ParenthesesMatching.parenthesesMatching(bot, msg);
+  const sentMessage: Message[] = [
+    {
+      type: 'reply',
+      data: {
+        id: msg.message_id
+      }
+    }
+  ];
+  ParenthesesMatching.parenthesesMatching(msg, sentMessage);
+  Github.processMessage(bot, msg, sentMessage).then(() => {
+    if (sentMessage.length > 1) {
+      bot.sendGroupMsg(msg.group_id, sentMessage);
+    }
+  });
 }
 
 export const bot = new QQBot({

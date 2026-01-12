@@ -51,7 +51,7 @@ export class ParenthesesMatching {
     ParenthesesMatching.reversePairs[right] = left;
   }
 
-  public static parenthesesMatching(bot: QQBot, msg: GroupMessageWSMSG) {
+  public static parenthesesMatching(msg: GroupMessageWSMSG, sentMessage: Message[]) {
     if (msg.group_id != 659356928) return;
     const receivedMessage: TextMessage[] = [];
     msg.message.forEach(message => {
@@ -90,21 +90,12 @@ export class ParenthesesMatching {
             }
           }
 
-          const sentMessage: Message[] = [
-            {
-              type: 'reply',
-              data: {
-                id: msg.message_id
-              }
-            },
-            {
-              type: 'text',
-              data: {
-                text: errorMsg
-              }
+          sentMessage.push({
+            type: 'text',
+            data: {
+              text: errorMsg
             }
-          ];
-          bot.sendGroupMsg(msg.group_id, sentMessage);
+          });
           return;
         }
       }
@@ -116,20 +107,11 @@ export class ParenthesesMatching {
       result += ParenthesesMatching.bracketPairs[leftBracket.char];
     }
     if (result.trim().length == 0) return;
-    const sentMessage: Message[] = [
-      {
-        type: 'reply',
-        data: {
-          id: msg.message_id
-        }
-      },
-      {
-        type: 'text',
-        data: {
-          text: result
-        }
+    sentMessage.push({
+      type: 'text',
+      data: {
+        text: result
       }
-    ];
-    if (!!sentMessage) bot.sendGroupMsg(msg.group_id, sentMessage);
+    });
   }
 }

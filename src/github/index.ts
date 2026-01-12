@@ -2,9 +2,9 @@ import { EventManager } from 'gugle-event';
 import { Logger } from 'winston';
 import http from 'node:http';
 import { QQBot } from '@/index';
-import { AllIssueEvent } from '@/type/github';
+import { AllIssueEvent, Issue } from '@/type/github';
 import { GitHubImage } from '@/image';
-import { SentMessage } from '@/type';
+import { GroupMessageWSMSG, Message, SentMessage, TextMessage } from '@/type';
 
 export class Github {
   private readonly bot: QQBot;
@@ -78,6 +78,46 @@ export class Github {
     const self = this;
     this.httpServer.listen(port, () => {
       self.logger?.info(`http server listen on port ${port}`);
+    });
+  }
+
+  public static processMessage(bot: QQBot, msg: GroupMessageWSMSG, sentMessage: Message[]): Promise<void> {
+    if (msg.group_id != 659356928 && msg.group_id != 475133231) return Promise.resolve();
+    const receivedMessage: TextMessage[] = [];
+    msg.message.forEach(message => {
+      if (message.type != 'text') return;
+      receivedMessage.push(message);
+    });
+    const strMsg = receivedMessage.map(msg => msg.data.text).join(' ');
+    const numStr = strMsg.match(/#(\d+)/g)?.shift();
+    if (!numStr) return Promise.resolve();
+    const number = parseInt(numStr.substring(1));
+    const url = `https://gh-proxy.top/https://api.github.com/repos/Anvil-Dev/AnvilCraft/issues/${number}`;
+    return new Promise<void>((resolve, reject) => {
+      bot.axiosInstance
+        .get(url)
+        .then(response => {
+          const data = response.data;
+          if (data.pull_request) return;
+          GitHubImage.issuesHandler(data as Issue, bot.logger)
+            .then(data => {
+              sentMessage.push({
+                type: 'image',
+                data: {
+                  file: `data:image/png;base64, ${data}`
+                }
+              });
+              resolve();
+            })
+            .catch(e => {
+              bot.logger?.error(e);
+              reject(e);
+            });
+        })
+        .catch(error => {
+          bot.logger?.error(error);
+          reject(error);
+        });
     });
   }
 }
