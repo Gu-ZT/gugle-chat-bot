@@ -2,7 +2,7 @@ import { EventManager } from 'gugle-event';
 import { Logger } from 'winston';
 import http from 'node:http';
 import { QQBot } from '@/index';
-import { AllIssueEvent, Issue } from '@/type/github';
+import { AllIssueEvent, AllPullRequestEvent, Issue, PullRequest } from '@/type/github';
 import { GitHubImage } from '@/image';
 import { GroupMessageWSMSG, Message, SentMessage, TextMessage } from '@/type';
 
@@ -17,6 +17,7 @@ export class Github {
     this.logger = bot.logger!;
     this.eventManager = new EventManager();
     this.eventManager.listen('github-issues', this.listenIssueEvent.bind(this));
+    this.eventManager.listen('github-pull_request', this.listenPullRequestEvent.bind(this));
     this.httpServer = http.createServer((req, res) => {
       if (req.method === 'POST') {
         let body = '';
@@ -46,12 +47,26 @@ export class Github {
 
   private listenIssueEvent(bot: QQBot, msg: AllIssueEvent) {
     let promise: Promise<string> | undefined = undefined;
-    if (msg.action === 'opened') {
+    if (msg.action === 'opened' || msg.action === 'reopened') {
       promise = GitHubImage.issuesOpened(msg, this.logger);
     } else if (msg.action === 'closed') {
       promise = GitHubImage.issuesClosed(msg, this.logger);
     }
-    promise
+    this.sendGeneratedImage(bot, 'issue', promise)
+  }
+
+  private listenPullRequestEvent(bot: QQBot, msg: AllPullRequestEvent) {
+    let promise: Promise<string> | undefined = undefined;
+    if (msg.action === 'opened' || msg.action === 'reopened') {
+      promise = GitHubImage.prOpened(msg, this.logger);
+    } else if (msg.action === 'closed') {
+      promise = GitHubImage.prClosed(msg, this.logger);
+    }
+    this.sendGeneratedImage(bot, 'pull request', promise)
+  }
+
+  private sendGeneratedImage(bot: QQBot, type: string, result: Promise<string> | undefined = undefined) {
+    result
       ?.then(base64 => {
         const msg: SentMessage = [
           {
@@ -63,7 +78,7 @@ export class Github {
         ];
         bot.sendGroupMsg(475133231, msg);
         bot.sendGroupMsg(659356928, msg);
-        this.logger?.debug(`Sent process issue message...`);
+        this.logger?.debug(`Sent process ${type} message...`);
       })
       .catch(e => {
         this.logger?.error(e);
@@ -92,13 +107,34 @@ export class Github {
     const numStr = strMsg.match(/#(\d+)/g)?.shift();
     if (!numStr) return Promise.resolve();
     const number = parseInt(numStr.substring(1));
-    const url = `https://gh-proxy.top/https://api.github.com/repos/Anvil-Dev/AnvilCraft/issues/${number}`;
+    const issueUrl = `https://gh-proxy.top/https://api.github.com/repos/Anvil-Dev/AnvilCraft/issues/${number}`;
+    const pullUrl = `https://gh-proxy.top/https://api.github.com/repos/Anvil-Dev/AnvilCraft/pulls/${number}`;
     return new Promise<void>((resolve, reject) => {
       bot.axiosInstance
-        .get(url)
+        .get(issueUrl)
         .then(response => {
           const data = response.data;
-          if (data.pull_request) return;
+          if (data.pull_request) {
+            bot.axiosInstance
+              .get(pullUrl)
+              .then(response => {
+                const data = response.data;
+                GitHubImage.prHandler(data as PullRequest, bot.logger)
+                  .then(data => {
+                    sentMessage.push({
+                      type: 'image',
+                      data: {
+                        file: `data:image/png;base64, ${data}`
+                      }
+                    });
+                    resolve();
+                  })
+                  .catch(e => {
+                    bot.logger?.error(e);
+                    reject(e);
+                  });
+              })
+          }
           GitHubImage.issuesHandler(data as Issue, bot.logger)
             .then(data => {
               sentMessage.push({

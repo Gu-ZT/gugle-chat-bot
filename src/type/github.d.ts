@@ -1,32 +1,47 @@
 export interface User {
-  avatar_url?: string;
+  avatar_url: string;
   deleted?: boolean;
   email?: string;
-  html_url?: string;
+  html_url: string;
   id: number;
   login: string;
   name?: string;
-  type?: 'Bot' | 'User' | 'Organization';
+  type: 'Bot' | 'User' | 'Organization';
 }
 
 export interface Label {
-  color?: string;
-  name?: string;
+  color: string;
+  name: string;
   description?: string;
 }
 
+export type State = 'open' | 'closed';
 export interface Issue {
   title: string | number;
   number: number;
   body: string;
   assignee?: User;
-  state?: string;
+  state: State;
   state_reason?: string;
-  milestone?: string | number;
+  milestone?: Milestone;
   labels: Label[];
-  assignees: User[];
+  assignees?: User[];
   type: string;
   user: User;
+}
+
+export interface PullRequest {
+  title: string | number;
+  number: number;
+  body: string;
+  requested_reviewers?: User;
+  assignee?: User;
+  state: State;
+  milestone?: Milestone;
+  labels: Label[];
+  assignees?: User[];
+  user: User;
+  merged: boolean;
 }
 
 export interface Organization {
@@ -34,6 +49,23 @@ export interface Organization {
   login: string;
   description: string;
   avatar_url: string;
+}
+
+export type Privacy = State | 'secret';
+export interface Team {
+  id: number;
+  name: string;
+  slug: string;
+  description: string;
+  node_id: string;
+  url: string;
+  html_url: string;
+  repositories_url: string;
+  members_url: string;
+  permission: string;
+  privacy: Privacy;
+  deleted?: boolean;
+  parent?: Team;
 }
 
 export interface Repository {
@@ -56,7 +88,7 @@ export interface Milestone {
   node_id: string;
   number: string;
   open_issues: number;
-  state: 'open' | 'closed';
+  state: State;
   title: string;
   updated_at: string;
   url: string;
@@ -189,3 +221,161 @@ export type AllIssueEvent =
   | UnlabeledIssueEvent
   | UnpinnedIssueEvent
   | UntypedIssueEvent;
+
+export interface PullRequestEvent {
+  pull_request: PullRequest;
+  organization?: Organization;
+  repository: Repository;
+  sender: User;
+}
+
+export type AssignedPullRequestEvent = PullRequestEvent & {
+  action: 'assigned';
+  assignee?: User;
+};
+
+export type AutoMergeDisabledPullRequestEvent = PullRequestEvent & {
+  action: 'auto_merge_disabled';
+  reason: string;
+};
+
+export type AutoMergeEnabledPullRequestEvent = PullRequestEvent & {
+  action: 'auto_merge_enabled';
+  reason?: string;
+};
+
+export type ClosedPullRequestEvent = PullRequestEvent & {
+  action: 'closed';
+};
+
+export type ConvertedToDraftPullRequestEvent = PullRequestEvent & {
+  action: 'converted_to_draft';
+};
+
+export type DemilestonedPullRequestEvent = PullRequestEvent & {
+  action: 'demilestoned';
+  milestone?: Milestone;
+};
+
+export type DequeuedReason =
+  | 'UNKNOWN_REMOVAL_REASON'
+  | 'MANUAL'
+  | 'MERGE'
+  | 'MERGE_CONFLICT'
+  | 'CI_FAILURE'
+  | 'CI_TIMEOUT'
+  | 'ALREADY_MERGED'
+  | 'QUEUE_CLEARED'
+  | 'ROLL_BACK'
+  | 'BRANCH_PROTECTIONS'
+  | 'GIT_TREE_INVALID'
+  | 'INVALID_MERGE_COMMIT';
+export type DequeuedPullRequestEvent = PullRequestEvent & {
+  action: 'dequeued';
+  reason: DequeuedReason;
+};
+
+export type EditedPullRequestEvent = PullRequestEvent & {
+  action: 'edited';
+  changes: {
+    base: {
+      ref: {
+        from: string;
+      };
+      sha: {
+        from: string;
+      };
+    };
+    body?: {
+      from: string;
+    };
+    title?: {
+      from: string;
+    };
+  };
+};
+
+export type EnqueuedPullRequestEvent = PullRequestEvent & {
+  action: 'enqueued';
+};
+
+export type LabeledPullRequestEvent = PullRequestEvent & {
+  action: 'labeled';
+  label?: Label;
+};
+
+export type LockedPullRequestEvent = PullRequestEvent & {
+  action: 'locked';
+};
+
+export type MilestonedPullRequestEvent = PullRequestEvent & {
+  action: 'milestoned';
+  milestone?: Milestone;
+};
+
+export type OpenedPullRequestEvent = PullRequestEvent & {
+  action: 'opened';
+};
+
+export type ReadyForReviewPullRequestEvent = PullRequestEvent & {
+  action: 'ready_for_review';
+};
+
+export type ReopenedPullRequestEvent = PullRequestEvent & {
+  action: 'reopened';
+};
+
+export type ReviewRequestRemovedPullRequestEvent = PullRequestEvent & {
+  action: 'review_request_removed';
+  requested_reviewer?: User;
+  requested_team: Team;
+};
+
+export type ReviewRequestedPullRequestEvent = PullRequestEvent & {
+  action: 'review_requested';
+  requested_reviewer?: User;
+  requested_team: Team;
+};
+
+export type SynchronizePullRequestEvent = PullRequestEvent & {
+  action: 'synchronize';
+  after: string;
+  before: string;
+};
+
+export type UnassignedPullRequestEvent = PullRequestEvent & {
+  action: 'unassigned';
+  assignee?: User;
+};
+
+export type UnlabeledPullRequestEvent = PullRequestEvent & {
+  action: 'unlabeled';
+  label?: Label;
+};
+
+export type UnlockedPullRequestEvent = PullRequestEvent & {
+  action: 'unlocked';
+};
+
+export type AllPullRequestEvent =
+  | AssignedPullRequestEvent
+  | AutoMergeDisabledPullRequestEvent
+  | AutoMergeEnabledPullRequestEvent
+  | ClosedPullRequestEvent
+  | ConvertedToDraftPullRequestEvent
+  | DemilestonedPullRequestEvent
+  | DequeuedPullRequestEvent
+  | EditedPullRequestEvent
+  | EnqueuedPullRequestEvent
+  | LabeledPullRequestEvent
+  | LockedPullRequestEvent
+  | MilestonedPullRequestEvent
+  | OpenedPullRequestEvent
+  | ReadyForReviewPullRequestEvent
+  | ReopenedPullRequestEvent
+  | ReviewRequestRemovedPullRequestEvent
+  | ReviewRequestedPullRequestEvent
+  | SynchronizePullRequestEvent
+  | UnassignedPullRequestEvent
+  | UnlabeledPullRequestEvent
+  | UnlockedPullRequestEvent;
