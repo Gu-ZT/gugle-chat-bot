@@ -119,7 +119,7 @@ function issuesHandler(operation: string, issue: IssueEvent, logger?: Logger, ex
                 width: 1800,
                 height: 1
               },
-              timeout: 600000,
+              timeout: 60000,
               headless: true,
               args: [
                 '--no-sandbox',
@@ -131,7 +131,8 @@ function issuesHandler(operation: string, issue: IssueEvent, logger?: Logger, ex
               ]
             },
             type: 'png',
-            timeout: 600000
+            timeout: 60000,
+            waitUntil: 'domcontentloaded'
           })
             .then(image => {
               // const outputPath = path.join(process.cwd(), 'output.png');
