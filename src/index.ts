@@ -10,7 +10,7 @@ import { EventManager } from 'gugle-event';
 import { GroupMessageWSMSG, SentMessage, WSMSG } from '@/type';
 import axios, { AxiosInstance } from 'axios';
 import { Github } from '@/github';
-import { parenthesesMatching } from '@/func/ParenthesesMatching';
+import { ParenthesesMatching } from '@/func/ParenthesesMatching';
 
 export class QQBot {
   private path: string = process.cwd();
@@ -162,7 +162,7 @@ export class QQBot {
 }
 
 function listenGroupMsg(bot: QQBot, msg: GroupMessageWSMSG) {
-  parenthesesMatching(bot, msg);
+  ParenthesesMatching.parenthesesMatching(bot, msg);
 }
 
 export const bot = new QQBot({
