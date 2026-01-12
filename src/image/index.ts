@@ -2,6 +2,7 @@ import nodeHtmlToImage from 'node-html-to-image';
 import fs from 'node:fs';
 import { IssueEvent } from '@/type/github';
 import Constants from '@/constants';
+import { Logger } from 'winston';
 
 class Template {
   private readonly templateName: string;
@@ -61,7 +62,7 @@ function getIssuesType(issue: IssueEvent): 'bug' | 'TODO' | 'enhancement' | unde
   return undefined;
 }
 
-function issuesHandler(operation: string, issue: IssueEvent, extra?: string) {
+function issuesHandler(operation: string, issue: IssueEvent, logger?: Logger, extra?: string) {
   const type = getIssuesType(issue);
   let issueBody = '';
   const bodies: string[] = issue.issue.body.split('\n');
@@ -104,6 +105,7 @@ function issuesHandler(operation: string, issue: IssueEvent, extra?: string) {
       .arg('extra', extra || '')
       .handler()
       .then(issue => {
+        logger?.debug(`Start process issue message...`);
         // console.log(issue);
         nodeHtmlToImage({
           html: issue,
@@ -130,7 +132,7 @@ function issuesHandler(operation: string, issue: IssueEvent, extra?: string) {
   });
 }
 
-function issuesClosed(issue: IssueEvent): Promise<string> {
+function issuesClosed(issue: IssueEvent, logger?: Logger): Promise<string> {
   let extra: string | undefined;
   if (issue.issue.state_reason) {
     extra = "<div class='h1'>关闭原因：</div>\n";
@@ -144,19 +146,19 @@ function issuesClosed(issue: IssueEvent): Promise<string> {
   } else {
     extra += `<div class='body'>${issue.issue.state_reason}</div>\n`;
   }
-  return issuesHandler('关闭', issue,  extra);
+  return issuesHandler('关闭', issue, logger, extra);
 }
 
-function issuesOpened(issue: IssueEvent): Promise<string> {
-  return issuesHandler('提交', issue);
+function issuesOpened(issue: IssueEvent, logger?: Logger): Promise<string> {
+  return issuesHandler('提交', issue, logger);
 }
 
 export class GitHubImage {
-  public static issuesOpened(issue: IssueEvent): Promise<string> {
-    return issuesOpened(issue);
+  public static issuesOpened(issue: IssueEvent, logger?: Logger): Promise<string> {
+    return issuesOpened(issue, logger);
   }
 
-  public static issuesClosed(issue: IssueEvent): Promise<string> {
-    return issuesClosed(issue);
+  public static issuesClosed(issue: IssueEvent, logger?: Logger): Promise<string> {
+    return issuesClosed(issue, logger);
   }
 }

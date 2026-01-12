@@ -47,9 +47,9 @@ export class Github {
   private listenIssueEvent(bot: QQBot, msg: AllIssueEvent) {
     let promise: Promise<string> | undefined = undefined;
     if (msg.action === 'opened') {
-      promise = GitHubImage.issuesOpened(msg);
+      promise = GitHubImage.issuesOpened(msg, this.logger);
     } else if (msg.action === 'closed') {
-      promise = GitHubImage.issuesClosed(msg);
+      promise = GitHubImage.issuesClosed(msg, this.logger);
     }
     promise
       ?.then(base64 => {
@@ -63,6 +63,7 @@ export class Github {
         ];
         bot.sendGroupMsg(475133231, msg);
         bot.sendGroupMsg(659356928, msg);
+        this.logger?.debug(`Sent process issue message...`);
       })
       .catch(e => {
         this.logger?.error(e);
