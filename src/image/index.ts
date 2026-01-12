@@ -81,7 +81,10 @@ function issuesHandler(operation: string, issue: IssueEvent, logger?: Logger, ex
       }
     }
     if (!start) continue;
-    if (body.startsWith('### Checks - 检查项')) {
+    if (
+      body.startsWith('### Checks - 检查项')
+      || body.startsWith('### This issue is unique - 这个issue是唯一的')
+    ) {
       break;
     }
     if (body.startsWith('### ')) {
