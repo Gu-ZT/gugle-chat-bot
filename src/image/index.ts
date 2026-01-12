@@ -108,6 +108,7 @@ function issuesHandler(operation: string, issue: IssueEvent, extra?: string) {
         nodeHtmlToImage({
           html: issue,
           puppeteerArgs: {
+            executablePath: 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
             defaultViewport: {
               width: 1800,
               height: 1
