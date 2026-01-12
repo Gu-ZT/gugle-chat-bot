@@ -285,18 +285,3 @@ function tryGenerateImage(resolve: (value: string | PromiseLike<string>) => void
     reject(e);
   }
 }
-
-function test() {
-  axios.get("https://gh-proxy.top/https://api.github.com/repos/Anvil-Dev/AnvilCraft/issues/3213", {
-    headers: {
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28'
-    }
-  }).then(
-    res => {
-      console.log(JSON.stringify(res.data, null, 4))
-    }
-  )
-}
-
-test()
