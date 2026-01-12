@@ -4,6 +4,7 @@ import http from 'node:http';
 import { QQBot } from '@/index';
 import { AllIssueEvent } from '@/type/github';
 import { GitHubImage } from '@/image';
+import { SentMessage } from '@/type';
 
 export class Github {
   private readonly bot: QQBot;
@@ -52,14 +53,16 @@ export class Github {
     }
     promise
       ?.then(base64 => {
-        bot.sendGroupMsg(475133231, [
+        const msg: SentMessage = [
           {
             type: 'image',
             data: {
               file: `data:image/png;base64, ${base64}`
             }
           }
-        ]);
+        ];
+        bot.sendGroupMsg(475133231, msg);
+        bot.sendGroupMsg(659356928, msg);
       })
       .catch(e => {
         this.logger?.error(e);
