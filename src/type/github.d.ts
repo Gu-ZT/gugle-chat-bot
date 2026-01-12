@@ -45,6 +45,7 @@ export interface PullRequest {
   assignees?: User[];
   user: User;
   merged: boolean;
+  draft?: boolean;
 }
 
 export interface Organization {
