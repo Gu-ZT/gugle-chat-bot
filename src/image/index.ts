@@ -66,12 +66,12 @@ function imageToBase64(image: Buffer<ArrayBufferLike>) {
 
 function getIssueState(issue: Issue) {
   if (issue.state == 'open') {
-    return `<svg focusable="false" aria-label="Issue" class="octicon octicon-issue-opened prc-StateLabel-Icon-YICrR" role="img" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"></path></svg><div class="label" style="background-color: #347D3955; border:2px solid #347D3999">Open</div>\n`;
+    return `<div class="label" style="color:white; background-color: #347D3999; border:2px solid #347D39DD"><svg focusable="false" aria-label="Issue" class="octicon octicon-issue-opened prc-StateLabel-Icon-YICrR" role="img" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"></path></svg> Open</div>\n`;
   } else {
     if (issue.state_reason == 'completed') {
-      return `<svg focusable="false" aria-label="Issue" class="octicon octicon-issue-closed prc-StateLabel-Icon-YICrR" role="img" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M11.28 6.78a.75.75 0 0 0-1.06-1.06L7.25 8.69 5.78 7.22a.75.75 0 0 0-1.06 1.06l2 2a.75.75 0 0 0 1.06 0l3.5-3.5Z"></path><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0Zm-1.5 0a6.5 6.5 0 1 0-13 0 6.5 6.5 0 0 0 13 0Z"></path></svg><div class="label" style="background-color: #8256D055; border:2px solid #8256D099">Closed</div>\n`;
+      return `<div class="label" style="color:white; background-color: #8256D099; border:2px solid #8256D0DD"><svg focusable="false" aria-label="Issue" class="octicon octicon-issue-closed prc-StateLabel-Icon-YICrR" role="img" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M11.28 6.78a.75.75 0 0 0-1.06-1.06L7.25 8.69 5.78 7.22a.75.75 0 0 0-1.06 1.06l2 2a.75.75 0 0 0 1.06 0l3.5-3.5Z"></path><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0Zm-1.5 0a6.5 6.5 0 1 0-13 0 6.5 6.5 0 0 0 13 0Z"></path></svg> Closed</div>\n`;
     } else {
-      return `<div class="label" style="background-color: #656C7655; border:2px solid #656C7699"><svg focusable="false" aria-label="Issue, not planned" class="octicon octicon-skip prc-StateLabel-Icon-YICrR" role="img" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align: text-bottom;"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm9.78-2.22-5.5 5.5a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734l5.5-5.5a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Z"></path></svg>Closed</div>\n`;
+      return `<div class="label" style="color:white; background-color: #656C7699; border:2px solid #656C76DD"><svg focusable="false" aria-label="Issue, not planned" class="octicon octicon-skip prc-StateLabel-Icon-YICrR" role="img" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align: text-bottom;"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm9.78-2.22-5.5 5.5a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734l5.5-5.5a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Z"></path></svg> Closed</div>\n`;
     }
   }
 }
@@ -116,7 +116,7 @@ function issuesHandler(issue: Issue, logger?: Logger, operation?: string, sender
   }
   let labelsHtml = '';
   for (let label of issue.labels) {
-    labelsHtml += `<div class="label" style="background-color: #${label.color}55; border:2px solid #${label.color}99">${label.name}</div>\n`;
+    labelsHtml += `<div class="label" style="color:#${label.color}ff; background-color: #${label.color}55; border:2px solid #${label.color}99">${label.name}</div>\n`;
   }
   let headerExtra: string | undefined = undefined;
   if (sender) {
