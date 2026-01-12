@@ -66,12 +66,17 @@ export class ParenthesesMatching {
         stack.push({ char, position: i });
       } else if (ParenthesesMatching.closingBrackets.has(char)) {
         const expected = ParenthesesMatching.reversePairs[char];
+        const charType = ParenthesesMatching.bracketTypeMap[char];
         if (stack.length > 0 && stack[stack.length - 1]!.char === expected) {
           stack.pop();
         } else {
           let errorMsg = `括号匹配错误：第 ${i + 1} 个字符 '${char}' `;
           if (stack.length === 0) {
-            errorMsg += '没有对应的左括号';
+            let errorType = '括号';
+            let errorDirection = '左';
+            if (charType && charType.endsWith('quote')) errorType = '引号';
+            if (charType && charType.startsWith('vertical')) errorDirection = '上';
+            errorMsg += `没有对应的${errorDirection}${errorType}`;
           } else {
             const topBracket = stack[stack.length - 1]!;
             const expectedClosing = ParenthesesMatching.bracketPairs[topBracket.char];

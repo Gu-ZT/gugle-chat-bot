@@ -14,7 +14,7 @@ export class Github {
     this.bot = bot;
     this.logger = bot.logger!;
     this.eventManager = new EventManager();
-    this.eventManager.listen('github-issue', this.listenIssueEvent.bind(this));
+    this.eventManager.listen('github-issues', this.listenIssueEvent.bind(this));
     this.httpServer = http.createServer((req, res) => {
       if (req.method === 'POST') {
         let body = '';
