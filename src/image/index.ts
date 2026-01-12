@@ -119,7 +119,16 @@ function issuesHandler(operation: string, issue: IssueEvent, logger?: Logger, ex
                 width: 1800,
                 height: 1
               },
-              timeout: 600000
+              timeout: 600000,
+              headless: true,
+              args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--disable-software-rasterizer',
+                '--disable-extensions'
+              ]
             },
             type: 'png',
             timeout: 600000
