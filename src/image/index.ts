@@ -66,7 +66,7 @@ function imageToBase64(image: Buffer<ArrayBufferLike>) {
 
 function getIssueState(issue: Issue) {
   if (issue.state == 'open') {
-    return `<div class="label" style="display: flex; align-items: center; color:white; background-color: #347D39;">
+    return `<div class="label" style="color:white; background-color: #347D39;">
                 <div style="display: flex; align-items: center;">
                   <svg focusable="false" aria-label="Issue" 
                       class="octicon octicon-issue-opened prc-StateLabel-Icon-YICrR" role="img" viewBox="0 0 16 16" 
@@ -80,7 +80,7 @@ function getIssueState(issue: Issue) {
             </div>\n`;
   } else {
     if (issue.state_reason == 'completed') {
-      return `<div class="label" style="display: flex; align-items: center; color:white; background-color: #8256D0;">
+      return `<div class="label" style="color:white; background-color: #8256D0;">
                 <div style="display: flex; align-items: center;">
                   <svg focusable="false" aria-label="Issue" class="octicon octicon-issue-closed prc-StateLabel-Icon-YICrR"
                    role="img" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" 
