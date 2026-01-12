@@ -115,7 +115,8 @@ function issuesHandler(operation: string, issue: IssueEvent, extra?: string) {
             },
             timeout: 300000
           },
-          type: 'png'
+          type: 'png',
+          timeout: 300000
         })
           .then(image => {
             // const outputPath = path.join(process.cwd(), 'output.png');
