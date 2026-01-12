@@ -8,10 +8,10 @@
     </div>
     {{extra}}
     <div class="title">
-        <div class="labels">{{state label}}</div>
+        {{state label}}
         {{issue title}}
     </div>
-    <div class="labels">{{labels}}</div>
+    {{labels}}
     <div class="content">
         {{issue body}}
     </div>
@@ -45,19 +45,14 @@
         margin-bottom: 10px;
     }
 
-    .labels {
+    .label {
         display: inline-block;
         margin-bottom: 10px;
-        padding: 0 15px;
-    }
-
-    .label {
-        display: flex;
-        align-items: center;
         font-size: 20px;
         font-weight: bold;
         text-align: center;
         border-radius: 9999px;
+        padding: 0 15px;
     }
 
     .h1 {
