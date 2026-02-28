@@ -26,6 +26,10 @@ export function renderMarkdown(body?: string): any {
   const sup = require('markdown-it-sup');
   const sub = require('markdown-it-sub');
   const renderer = markdownit({
+    html: true,
+    linkify: true,
+    breaks: true,
+    xhtmlOut: true,
     highlight: function (str, lang): any {
       if (lang && hljs.getLanguage(lang)) {
         try {
