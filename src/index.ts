@@ -9,8 +9,8 @@ import { LoggerFactory } from '@/logger';
 import { EventManager } from 'gugle-event';
 import { GroupMessageWSMSG, Message, SentMessage, WSMSG } from '@/type';
 import axios, { AxiosInstance } from 'axios';
-import { Github } from '@/github';
-import { ParenthesesMatching } from '@/func/ParenthesesMatching';
+import { ParenthesesMatching } from '@/features/parentheses';
+import { Github } from '@/features/github';
 
 export class QQBot {
   private path: string = process.cwd();

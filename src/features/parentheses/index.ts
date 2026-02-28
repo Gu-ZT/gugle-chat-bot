@@ -1,5 +1,4 @@
 import { GroupMessageWSMSG, Message, TextMessage } from '@/type';
-import { QQBot } from '@/index';
 
 export class ParenthesesMatching {
   static readonly bracketPairs: Record<string, string> = {};
