@@ -182,4 +182,19 @@ export type PrivateMessageWSMSG = MessageWSMSG & {
 
 export type AllMessageWSMSG = GroupMessageWSMSG | PrivateMessageWSMSG;
 
-export type WSMSG = AllMetaEventWSMSG | AllMessageWSMSG;
+export type NoticeWSMSG = {
+  post_type: 'notice';
+};
+
+export type PokeNoticeWSMSG = NoticeWSMSG & {
+  notice_type: 'notify';
+  sub_type: 'poke';
+  group_id?: number;
+  target_id: number;
+  self_id: number;
+  user_id: number;
+};
+
+export type AllNoticeWSMSG = PokeNoticeWSMSG;
+
+export type WSMSG = AllMetaEventWSMSG | AllMessageWSMSG | AllNoticeWSMSG;

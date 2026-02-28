@@ -7,10 +7,11 @@ import fs from 'node:fs';
 import dayjs from 'dayjs';
 import { LoggerFactory } from '@/logger';
 import { EventManager } from 'gugle-event';
-import { GroupMessageWSMSG, Message, SentMessage, WSMSG } from '@/type';
+import { GroupMessageWSMSG, Message, PokeNoticeWSMSG, SentMessage, WSMSG } from '@/type';
 import axios, { AxiosInstance } from 'axios';
 import { ParenthesesMatching } from '@/features/parentheses';
 import { Github } from '@/features/github';
+import { Poke } from '@/features/poke';
 
 export class QQBot {
   private path: string = process.cwd();
@@ -131,6 +132,10 @@ export class QQBot {
       bot.logger?.debug(`post message event: message-event-${msg.message_type}`);
       bot.post(`message-event-${msg.message_type}`, bot, msg).then();
     }
+    if (msg.post_type == 'notice' && msg.notice_type == 'notify') {
+      bot.logger?.debug(`post notice event: notice-event-${msg.sub_type}`);
+      bot.post(`notice-event-${msg.sub_type}`, bot, msg).then();
+    }
   }
 
   private onHeartbeat(bot: QQBot, data: RawData) {
@@ -163,6 +168,20 @@ export class QQBot {
         .then();
     });
   }
+
+  public ban(groupId: number, userId: number, duration: number) {
+    const bot = this;
+    this.operationQueue.push(() => {
+      bot.logger?.debug(`ban ${userId} in group ${groupId} for ${duration} seconds`);
+      bot.axiosInstance
+        .post(`/set_group_ban`, {
+          group_id: `${groupId}`,
+          user_id: `${userId}`,
+          duration: duration
+        })
+        .then();
+    });
+  }
 }
 
 function listenGroupMsg(bot: QQBot, msg: GroupMessageWSMSG) {
@@ -182,12 +201,38 @@ function listenGroupMsg(bot: QQBot, msg: GroupMessageWSMSG) {
   });
 }
 
+function listenPokeMsg(bot: QQBot, msg: PokeNoticeWSMSG) {
+  const sentMessage: Message[] = [
+    {
+      type: 'at',
+      data: {
+        qq: msg.user_id
+      }
+    },
+    {
+      type: 'text',
+      data: {
+        text: ' '
+      }
+    }
+  ];
+  Poke.processPokeMsg(bot, msg, sentMessage);
+  if (sentMessage.length > 2) {
+    if (msg.group_id) {
+      bot.sendGroupMsg(msg.group_id, sentMessage);
+    } else {
+      bot.sendPrivateMsg(msg.user_id, sentMessage);
+    }
+  }
+}
+
 export const bot = new QQBot({
   wsToken: '',
   httpToken: '',
   logLevel: 'debug',
   events: {
-    'message-event-group': listenGroupMsg
+    'message-event-group': listenGroupMsg,
+    'notice-event-poke': listenPokeMsg
   }
 });
 
