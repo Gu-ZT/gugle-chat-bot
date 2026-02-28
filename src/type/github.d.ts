@@ -47,6 +47,7 @@ export interface PullRequest {
   user: User;
   merged: boolean;
   draft?: boolean;
+  created_at: string;
 }
 
 export interface Organization {

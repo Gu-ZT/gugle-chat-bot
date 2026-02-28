@@ -1,24 +1,116 @@
 <html lang="zh">
 <head>
     <title>Pull Request #{{pr number}}</title>
+    <link rel="stylesheet" href="./style/pull_request.css">
 </head>
 
 <body>
+{{header extra}}
 <div class="container">
-    {{header extra}}
-    <div class="message">
-        <div class="number">
-            Pull Request #{{pr number}}
+    <div class="pr_title_container">
+        <h1 class="pr_title">
+            <bdi>{{pr title}}</bdi>
+            <span class="pr_number">#{{pr number}}</span>
+        </h1>
+    </div>
+    <div class="state_label_wrapper">
+        <div class="state_label_container">
+            <div class="state_labels_aligner">
+                {{state label}}
+            </div>
         </div>
     </div>
-    {{extra}}
-    <div class="title">
-        {{state label}}
-        {{pr title}}
-    </div>
-    {{labels}}
-    <div class="content">
-        {{pr body}}
+    <div class="header_body_splitter"></div>
+    <div class="body">
+        <div class="content">
+            <div class="content_container">
+                <div class="content_header">
+                    <span class="content_author">{{pr author}}</span>
+                    <span>created at {{pr created at}}</span>
+                </div>
+                <div class="content_body">
+                    {{pr body}}
+                </div>
+            </div>
+        </div>
+        <div class="metadata">
+            <div class="metadata_contents">
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">
+                                Assignees</h3></div>
+                            <span class="empty_text">in-development</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">Labels</h3>
+                            </div>
+                            <div class="metadata_labels_labels">
+                                {{pr labels}}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">Type</h3>
+                            </div>
+                            <span class="empty_text">in-development</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">
+                                Projects</h3></div>
+                            <span class="empty_text">in-development</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">
+                                Milestone</h3></div>
+                            <span class="empty_text">in-development</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">
+                                Relationships</h3></div>
+                            <span class="empty_text">in-development</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">
+                                Development</h3></div>
+                            <span class="empty_text">in-development</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">
+                                Participants</h3></div>
+                            <span class="empty_text">in-development</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 </body>

@@ -1,11 +1,12 @@
-
 * {
+    margin: 0;
     box-sizing: border-box;
     --fontStack-monospace: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
     --fontStack-sansSerif: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"
 }
 
 body {
+    margin: 10px;
     font-family: var(--fontStack-sansSerif), serif;
     font-size: .875rem;
     font-weight: 400;
@@ -79,8 +80,8 @@ body {
 }
 
 .state_label {
-    background-color: #1f883d;
-    box-shadow: inset 0 0 0 .625rem #1a7f37;
+    box-shadow-position: inset;
+    box-shadow-spread: .625rem;
     color: #fff;
     padding: .5rem .75rem;
     border-radius: 624.938rem;
@@ -95,6 +96,22 @@ body {
 
 .label {
     margin-right: .25rem;
+}
+
+.sidebar-label {
+    display: inline-flex;
+    margin-bottom: 10px;
+    font-weight: bold;
+    text-align: center;
+    border-radius: 9999px;
+    padding: 0 8px;
+    height: 20px;
+    font-size: 12px;
+    text-wrap-mode: nowrap;
+    -webkit-box-align: center;
+    align-items: center;
+    line-height: 20px;
+    text-underline-offset: 1px;
 }
 
 .header_body_splitter {
@@ -191,6 +208,7 @@ div {
 
 .alert-note {
     border-left-color: #0969da;
+
     .alert-title {
         color: #0969da;
     }
@@ -201,10 +219,12 @@ div {
     align-items: center;
     line-height: 1;
     display: flex;
+
     svg {
         fill: currentColor;
         margin-right: .5rem;
     }
+
     margin-bottom: 1rem;
 }
 

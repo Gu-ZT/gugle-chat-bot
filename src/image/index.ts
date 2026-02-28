@@ -74,7 +74,7 @@ export function tryGenerateImage(
       puppeteerArgs: {
         executablePath: Constants.CHROME_PATH,
         defaultViewport: {
-          width: 800,
+          width: 820,
           height: 1
         },
         timeout: 60000,

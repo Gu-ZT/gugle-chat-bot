@@ -2,14 +2,15 @@ import { OpenedPullRequestEvent, PullRequest, PullRequestEvent, ReopenedPullRequ
 import { Logger } from 'winston';
 import { Template, tryGenerateImage } from '@/image';
 import { renderMarkdown } from '@/features/github/image';
+import dayjs from 'dayjs';
 
 export function getPullRequestState(pr: PullRequest): string {
   if (pr.state == 'open') {
     if (pr.draft) {
       return `
-             <div class="state" style="background-color: #656c76">
+             <div class="state_label" style="color:white; background-color: #656c76;  box-shadow-color: #656c76;">
                  <div style="display: flex; align-items: center;">
-                     <svg class="octicon" focusable="false" height="16" viewBox="0 0 16 16" version="1.1" width="16" aria-hidden="true">
+                     <svg class="octicon" focusable="false" height="16" fill="currentColor" viewBox="0 0 16 16" version="1.1" width="16" aria-hidden="true">
                          <path d="M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 
                           0 0 1 3.25 1Zm9.5 14a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5ZM2.5 3.25a.75.75 0 1 0 1.5 0 
                           .75.75 0 0 0-1.5 0ZM3.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm9.5 0a.75.75 0 1 0 0 1.5.75.75 
@@ -22,9 +23,9 @@ export function getPullRequestState(pr: PullRequest): string {
              `;
     } else {
       return `
-             <div class="state" style="background-color: #238636">
+             <div class="state_label" style="color:white; background-color: #347d39; box-shadow-color: #347d39;">
                  <div style="display: flex; align-items: center;">
-                     <svg class="octicon" focusable="false" height="16" viewBox="0 0 16 16" version="1.1" width="16" aria-hidden="true">
+                     <svg class="octicon" focusable="false" height="16" fill="currentColor" viewBox="0 0 16 16" version="1.1" width="16" aria-hidden="true">
                          <path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 
                           0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 
                           2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 
@@ -39,9 +40,9 @@ export function getPullRequestState(pr: PullRequest): string {
   } else {
     if (pr.merged) {
       return `
-             <div class="state" style="background-color: #8957e5">
+             <div class="state_label" style="color:white; background-color: #8256d0; box-shadow-color: #8256d0;">
                  <div style="display: flex; align-items: center;">
-                     <svg class="octicon" focusable="false" height="16" viewBox="0 0 16 16" version="1.1" width="16" aria-hidden="true">
+                     <svg class="octicon" focusable="false" height="16" fill="currentColor" viewBox="0 0 16 16" version="1.1" width="16" aria-hidden="true">
                          <path d="M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734
                           0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 
                           0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 
@@ -53,9 +54,9 @@ export function getPullRequestState(pr: PullRequest): string {
              `;
     } else {
       return `
-             <div class="state" style="background-color: #da3633">
+             <div class="state_label" style="color:white; background-color: #c93c37; box-shadow-color: #c93c37;">
                  <div style="display: flex; align-items: center;">
-                     <svg class="octicon" focusable="false" height="16" viewBox="0 0 16 16" version="1.1" width="16" aria-hidden="true">
+                     <svg class="octicon" focusable="false" height="16" fill="currentColor" viewBox="0 0 16 16" version="1.1" width="16" aria-hidden="true">
                          <path d="M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251
                              0 0 1 3.25 1Zm9.5 5.5a.75.75 0 0 1 .75.75v3.378a2.251 2.251 0 1 1-1.5 0V7.25a.75.75
                              0 0 1 .75-.75Zm-2.03-5.273a.75.75 0 0 1 1.06 0l.97.97.97-.97a.748.748 0 0 1 1.265.332.75.75
@@ -75,7 +76,7 @@ export function getPullRequestState(pr: PullRequest): string {
 export function prHandler(pr: PullRequest, logger?: Logger, operation?: string, sender?: User, extra?: string) {
   let labelsHtml = '';
   for (let label of pr.labels) {
-    labelsHtml += `<div class="label" style="color:#${label.color}ff; background-color: #${label.color}55; border:2px solid #${label.color}99">${label.name}</div>\n`;
+    labelsHtml += `<div class="sidebar-label" style="color:#${label.color}ff; background-color: #${label.color}55; border:2px solid #${label.color}99">${label.name}</div>\n`;
   }
   let headerExtra: string | undefined = undefined;
   if (sender) {
@@ -87,7 +88,9 @@ export function prHandler(pr: PullRequest, logger?: Logger, operation?: string, 
       .arg('pr number', pr.number)
       .arg('pr title', pr.title)
       .arg('pr body', renderMarkdown(pr.body))
-      .arg('labels', labelsHtml)
+      .arg('pr labels', labelsHtml || 'No labels')
+      .arg('pr author', pr.user.login)
+      .arg('pr created at', dayjs(pr.created_at).format('YYYY-MM-DD HH:mm:ss'))
       .arg('state label', getPullRequestState(pr))
       .arg('extra', extra || '')
       .handler()

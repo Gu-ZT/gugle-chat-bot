@@ -7,7 +7,7 @@ import { renderMarkdown } from '@/features/github/image';
 function getIssueState(issue: Issue): string {
   if (issue.state == 'open') {
     return `
-           <div class="label" style="color:white; background-color: #347D39;">
+           <div class="state_label" style="color:white; background-color: #347d39; box-shadow-color: #347d39;">
                <div style="display: flex; align-items: center;">
                  <svg focusable="false" aria-label="Issue" 
                      class="octicon octicon-issue-opened prc-StateLabel-Icon-YICrR" role="img" viewBox="0 0 16 16" 
@@ -23,7 +23,7 @@ function getIssueState(issue: Issue): string {
   } else {
     if (issue.state_reason == 'completed') {
       return `
-             <div class="label" style="color:white; background-color: #8256D0;">
+             <div class="state_label" style="color:white; background-color: #8256d0; box-shadow-color: #8256d0;">
                  <div style="display: flex; align-items: center;">
                    <svg focusable="false" aria-label="Issue" class="octicon octicon-issue-closed prc-StateLabel-Icon-YICrR"
                     role="img" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" 
@@ -37,7 +37,7 @@ function getIssueState(issue: Issue): string {
              `;
     } else {
       return `
-             <div class="label" style="color:white; background-color: #656C76;">
+             <div class="state_label" style="color:white; background-color: #656c76; box-shadow-color: #656c76;">
                  <div style="display: flex; align-items: center;">
                    <svg focusable="false" aria-label="Issue, not planned" class="octicon octicon-skip prc-StateLabel-Icon-YICrR"
                     role="img" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" 
@@ -57,7 +57,7 @@ function getIssueState(issue: Issue): string {
 export function issuesHandler(issue: Issue, logger?: Logger, operation?: string, sender?: User, extra?: string) {
   let labelsHtml = '';
   for (let label of issue.labels) {
-    labelsHtml += `<div class="label" style="color:#${label.color}ff; background-color: #${label.color}55; border:2px solid #${label.color}99">${label.name}</div>\n`;
+    labelsHtml += `<div class="sidebar-label" style="color:#${label.color}ff; background-color: #${label.color}55; border:2px solid #${label.color}99">${label.name}</div>\n`;
   }
   let headerExtra: string | undefined = undefined;
   if (sender) {
@@ -72,7 +72,7 @@ export function issuesHandler(issue: Issue, logger?: Logger, operation?: string,
       .arg('issue author', issue.user.login)
       .arg('issue body', renderMarkdown(issue.body))
       .arg('issue created at', dayjs(issue.created_at).format('YYYY-MM-DD HH:mm:ss'))
-      .arg('labels', labelsHtml)
+      .arg('issue labels', labelsHtml || 'No labels')
       .arg('extra', extra || '')
       .handler()
       .then(issue => {
