@@ -24,6 +24,7 @@ export class QQBot {
   private lastHeartbeatTime: number = 0;
   private checkHeartbeatFunc?: NodeJS.Timeout = undefined;
   private operationQueue: (() => void)[] = [];
+  private lastOperationHandle = -1;
 
   public constructor(config: BotConfig) {
     this.config = config;
@@ -118,7 +119,18 @@ export class QQBot {
   private handlerOperationQueue(bot: QQBot) {
     const operation = bot.operationQueue.shift();
     if (!operation) return;
+    this.lastOperationHandle = dayjs().valueOf();
     operation();
+  }
+
+  private operation(func: () => void) {
+    const time = dayjs().valueOf();
+    if (time - this.lastOperationHandle > 2000) {
+      func();
+      this.lastOperationHandle = time;
+    } else {
+      this.operationQueue.push(func);
+    }
   }
 
   private onWebsocketMsg(bot: QQBot, data: RawData) {
@@ -147,7 +159,7 @@ export class QQBot {
 
   public sendPrivateMsg(userID: string | number, message: SentMessage) {
     const bot = this;
-    this.operationQueue.push(() => {
+    this.operation(() => {
       bot.axiosInstance
         .post(`/send_private_msg`, {
           user_id: userID,
@@ -159,7 +171,7 @@ export class QQBot {
 
   public sendGroupMsg(userID: string | number, message: SentMessage) {
     const bot = this;
-    this.operationQueue.push(() => {
+    this.operation(() => {
       bot.axiosInstance
         .post(`/send_group_msg`, {
           group_id: userID,
@@ -171,7 +183,7 @@ export class QQBot {
 
   public ban(groupId: number, userId: number, duration: number) {
     const bot = this;
-    this.operationQueue.push(() => {
+    this.operation(() => {
       bot.logger?.debug(`ban ${userId} in group ${groupId} for ${duration} seconds`);
       bot.axiosInstance
         .post(`/set_group_ban`, {
