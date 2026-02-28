@@ -31,6 +31,7 @@ export interface Issue {
   assignees?: User[];
   type: string;
   user: User;
+  created_at: string;
 }
 
 export interface PullRequest {

@@ -20,6 +20,14 @@ export class Template {
     return fs.readFileSync(`${templatePath}/${templateName}.html`, 'utf8');
   }
 
+  private async loadStyleSheet(templateName: string, templatePath: string): Promise<string> {
+    try {
+      return fs.readFileSync(`${templatePath}/style/${templateName}.css`, 'utf8');
+    } catch (e) {
+      return '';
+    }
+  }
+
   public arg(param: string, object: any): Template {
     this.processor.push(template => {
       while (template.includes(`{{${param}}}`)) {
@@ -34,14 +42,18 @@ export class Template {
     return new Promise((resolve, reject) => {
       this.loadTemplate(this.templateName, this.templatePath)
         .then(template => {
-          try {
-            this.processor.forEach(processor => {
-              template = processor(template);
-            });
-            resolve(template);
-          } catch (e) {
-            reject(e);
-          }
+          this.loadStyleSheet(this.templateName, this.templatePath).then(styleSheet => {
+            try {
+              this.processor.forEach(processor => {
+                template = processor(template);
+              });
+              template = template.replace('{{style sheet}}', `<style>\n${styleSheet}\n</style>`);
+              console.debug(template);
+              resolve(template);
+            } catch (e) {
+              reject(e);
+            }
+          });
         })
         .catch(reject);
     });
@@ -63,7 +75,7 @@ export function tryGenerateImage(
       puppeteerArgs: {
         executablePath: Constants.CHROME_PATH,
         defaultViewport: {
-          width: 1800,
+          width: 800,
           height: 1
         },
         timeout: 60000,

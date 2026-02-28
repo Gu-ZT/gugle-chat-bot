@@ -77,8 +77,9 @@ export class Github {
             }
           }
         ];
-        bot.sendGroupMsg(475133231, msg);
-        bot.sendGroupMsg(659356928, msg);
+        Constants.FUNCTION_GITHUB_GROUP.forEach(group => {
+          bot.sendGroupMsg(group, msg);
+        });
         this.logger?.debug(`Sent process ${type} message...`);
       })
       .catch(e => {
