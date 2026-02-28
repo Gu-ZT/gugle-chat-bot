@@ -48,7 +48,6 @@ export class Template {
                 template = processor(template);
               });
               template = template.replace('{{style sheet}}', `<style>\n${styleSheet}\n</style>`);
-              console.debug(template);
               resolve(template);
             } catch (e) {
               reject(e);
