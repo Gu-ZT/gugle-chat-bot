@@ -1,0 +1,112 @@
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>{{issue title}}</title>
+    <link rel="stylesheet" href="./style/issue.css">
+</head>
+
+<body>
+{{header extra}}
+<div class="container">
+    <div class="issue_title_container">
+        <h1 class="issue_title">
+            <bdi>{{issue title}}</bdi>
+            <span class="issue_number">#{{issue number}}</span>
+        </h1>
+    </div>
+    <div class="state_label_wrapper">
+        <div class="state_label_container">
+            <div class="state_labels_aligner">
+                <span class="state_label" data-size="medium" data-status="issueOpened">
+                    {{state label}}
+                </span>
+            </div>
+        </div>
+    </div>
+    <div class="header_body_splitter"></div>
+    <div class="body">
+        <div class="content">
+            <div class="content_container">
+                <div class="content_header">
+                    <span class="content_author">{{issue author}}</span>
+                    <span>opened {{issue created at}}</span>
+                </div>
+                <div class="content_body">
+                    {{issue body}}
+                </div>
+            </div>
+        </div>
+        <div class="metadata">
+            <div class="metadata_contents">
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">Assignees</h3></div>
+                            <span class="empty_text">in-development</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">Labels</h3></div>
+                            <div class="metadata_labels_labels">
+                                {{issue labels}}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">Type</h3></div>
+                            <span class="empty_text">in-development</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">Projects</h3></div>
+                            <span class="empty_text">in-development</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">Milestone</h3></div>
+                            <span class="empty_text">in-development</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">Relationships</h3></div>
+                            <span class="empty_text">in-development</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">Development</h3></div>
+                            <span class="empty_text">in-development</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="metadata_content_container">
+                    <div class="metadata_content">
+                        <div class="metadata_content_contents">
+                            <div class="metadata_content_title_container"><h3 class="metadata_content_title">Participants</h3></div>
+                            <span class="empty_text">in-development</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

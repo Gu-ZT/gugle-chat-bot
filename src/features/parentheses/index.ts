@@ -1,4 +1,5 @@
 import { GroupMessageWSMSG, Message, TextMessage } from '@/type';
+import Constants from '@/constants';
 
 export class ParenthesesMatching {
   static readonly bracketPairs: Record<string, string> = {};
@@ -51,7 +52,7 @@ export class ParenthesesMatching {
   }
 
   public static parenthesesMatching(msg: GroupMessageWSMSG, sentMessage: Message[]) {
-    if (msg.group_id != 659356928) return;
+    if (!Constants.FUNCTION_PARENTHESES_GROUP.includes(msg.group_id)) return;
     const receivedMessage: TextMessage[] = [];
     msg.message.forEach(message => {
       if (message.type != 'text') return;

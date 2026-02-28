@@ -3,8 +3,9 @@ import { Logger } from 'winston';
 import http from 'node:http';
 import { QQBot } from '@/index';
 import { AllIssueEvent, AllPullRequestEvent, Issue, PullRequest } from '@/type/github';
-import { GitHubImage } from '@/image';
 import { GroupMessageWSMSG, Message, SentMessage, TextMessage } from '@/type';
+import { GitHubImage } from '@/features/github/image';
+import Constants from '@/constants';
 
 export class Github {
   private readonly bot: QQBot;
@@ -52,7 +53,7 @@ export class Github {
     } else if (msg.action === 'closed') {
       promise = GitHubImage.issuesClosed(msg, this.logger);
     }
-    this.sendGeneratedImage(bot, 'issue', promise)
+    this.sendGeneratedImage(bot, 'issue', promise);
   }
 
   private listenPullRequestEvent(bot: QQBot, msg: AllPullRequestEvent) {
@@ -62,7 +63,7 @@ export class Github {
     } else if (msg.action === 'closed') {
       promise = GitHubImage.prClosed(msg, this.logger);
     }
-    this.sendGeneratedImage(bot, 'pull request', promise)
+    this.sendGeneratedImage(bot, 'pull request', promise);
   }
 
   private sendGeneratedImage(bot: QQBot, type: string, result: Promise<string> | undefined = undefined) {
@@ -97,7 +98,7 @@ export class Github {
   }
 
   public static processMessage(bot: QQBot, msg: GroupMessageWSMSG, sentMessage: Message[]): Promise<void> {
-    if (msg.group_id != 659356928 && msg.group_id != 475133231) return Promise.resolve();
+    if (!Constants.FUNCTION_GITHUB_GROUP.includes(msg.group_id)) return Promise.resolve();
     const receivedMessage: TextMessage[] = [];
     msg.message.forEach(message => {
       if (message.type != 'text') return;
@@ -115,25 +116,23 @@ export class Github {
         .then(response => {
           const data = response.data;
           if (data.pull_request) {
-            bot.axiosInstance
-              .get(pullUrl)
-              .then(response => {
-                const data = response.data;
-                GitHubImage.prHandler(data as PullRequest, bot.logger)
-                  .then(data => {
-                    sentMessage.push({
-                      type: 'image',
-                      data: {
-                        file: `data:image/png;base64, ${data}`
-                      }
-                    });
-                    resolve();
-                  })
-                  .catch(e => {
-                    bot.logger?.error(e);
-                    reject(e);
+            bot.axiosInstance.get(pullUrl).then(response => {
+              const data = response.data;
+              GitHubImage.prHandler(data as PullRequest, bot.logger)
+                .then(data => {
+                  sentMessage.push({
+                    type: 'image',
+                    data: {
+                      file: `data:image/png;base64, ${data}`
+                    }
                   });
-              })
+                  resolve();
+                })
+                .catch(e => {
+                  bot.logger?.error(e);
+                  reject(e);
+                });
+            });
             return;
           }
           GitHubImage.issuesHandler(data as Issue, bot.logger)
