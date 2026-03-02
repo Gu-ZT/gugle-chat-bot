@@ -307,12 +307,12 @@ export class QQBot {
     });
   }
 
-  public sendGroupMsg(userID: string | number, message: SentMessage) {
+  public sendGroupMsg(groupId: string | number, message: SentMessage) {
     const bot = this;
     this.operation(() => {
       bot.axiosInstance
         .post(`/send_group_msg`, {
-          group_id: userID,
+          group_id: groupId,
           message: message
         })
         .then();
