@@ -12,6 +12,8 @@ import axios, { AxiosInstance } from 'axios';
 import { ParenthesesMatching } from '@/features/parentheses';
 import { Github } from '@/features/github';
 import { Poke } from '@/features/poke';
+import * as cron from 'node-cron';
+import { BotEvent, BotEventCancelable, EventCallback } from '@/type/event';
 
 export class QQBot {
   private loginInfo?: LoginInfoData = undefined;
@@ -78,12 +80,6 @@ export class QQBot {
         bot.logger.info(`QQ Bot starting...`);
         bot.eventManager.listen('websocket-message', bot.onWebsocketMsg);
         bot.eventManager.listen('meta-event-heartbeat', bot.onHeartbeat);
-        if (bot.config.events) {
-          for (let key of Object.keys(bot.config.events)) {
-            if (!bot.config.events[key]) continue;
-            bot.eventManager.listen(key, bot.config.events[key]);
-          }
-        }
         bot.ws.on('message', rawData => {
           bot.post('websocket-message', bot, rawData);
         });
@@ -161,6 +157,59 @@ export class QQBot {
     bot.checkHeartbeatFunc = setTimeout(() => bot.checkHeartbeat(bot), 40000);
   }
 
+  // ------------------------------------------------
+  // Decorators
+  // ------------------------------------------------
+
+  /**
+   * 定义一个 cron 装饰器，用于根据给定的 cron 表达式调度任务
+   *
+   * @param _cron cron 表达式，用于指定任务执行的时间
+   * @returns {(executor: (bot: QQBot) => void) => void} 返回一个函数，该函数接受一个执行器函数作为参数，并在指定时间执行该执行器函数
+   *
+   * @example
+   * @ bot.cron('0/30 * * * * *')
+   * public cron(bot: HeyBoxBot): void {}
+   */
+  public cron(_cron: string): (executor: (bot: QQBot) => void) => void {
+    // 保存当前实例的引用，以便在后续的执行器函数中使用
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self: QQBot = this;
+    // 返回一个函数，该函数负责调度执行器函数
+    return function (executor: (bot: QQBot) => void) {
+      // 使用 cron 表达式调度任务，当时间匹配时执行执行器函数
+      cron.schedule(_cron, () => {
+        executor(self);
+      });
+    };
+  }
+
+  /**
+   * 定义一个事件订阅装饰器，用于根据事件触发回调
+   *
+   * @param event {string} 事件名称
+   * @param namespace {string} 命名空间，用于组织事件监听器
+   * @param priority {number} 优先级，决定事件回调的执行顺序
+   * @param cancelable {boolean} 是否可取消，决定是否可以取消事件，为 true 时，处理器第一个参数会传入 Cancelable
+   * @returns {(callback: (...args: any) => void) => void} 一个函数，接受事件回调并注册该回调到指定事件
+   *
+   * @example
+   * @ bot.subscribe('after-start', true)
+   * public test(cancelable: Cancelable, bot: HeyBoxBot) {}
+   */
+  public subscribe<T extends BotEvent, C extends BotEventCancelable>(
+    event: T,
+    cancelable: C = false as C,
+    namespace: string = 'gugle-event',
+    priority: number = 100
+  ): (callback: EventCallback<T, C>) => void {
+    return this.eventManager.subscribe(event, namespace, priority, cancelable);
+  }
+
+  // ------------------------------------------------
+  // API Methods
+  // ------------------------------------------------
+
   public sendPrivateMsg(userID: string | number, message: SentMessage) {
     const bot = this;
     this.operation(() => {
@@ -216,57 +265,57 @@ export class QQBot {
   }
 }
 
-function listenGroupMsg(bot: QQBot, msg: GroupMessageWSMSG) {
-  const sentMessage: Message[] = [
-    {
-      type: 'reply',
-      data: {
-        id: msg.message_id
-      }
-    }
-  ];
-  ParenthesesMatching.parenthesesMatching(msg, sentMessage);
-  Github.processMessage(bot, msg, sentMessage).then(() => {
-    if (sentMessage.length > 1) {
-      bot.sendGroupMsg(msg.group_id, sentMessage);
-    }
-  });
-}
-
-function listenPokeMsg(bot: QQBot, msg: PokeNoticeWSMSG) {
-  const sentMessage: Message[] = [
-    {
-      type: 'at',
-      data: {
-        qq: msg.user_id
-      }
-    },
-    {
-      type: 'text',
-      data: {
-        text: ' '
-      }
-    }
-  ];
-  Poke.processPokeMsg(bot, msg, sentMessage);
-  if (sentMessage.length > 2) {
-    if (msg.group_id) {
-      bot.sendGroupMsg(msg.group_id, sentMessage);
-    } else {
-      bot.sendPrivateMsg(msg.user_id, sentMessage);
-    }
-  }
-}
-
 export const bot = new QQBot({
   wsToken: '',
   httpToken: '',
-  logLevel: Constants.LOG_LEVEL,
-  events: {
-    'message-event-group': listenGroupMsg,
-    'notice-event-poke': listenPokeMsg
-  }
+  logLevel: Constants.LOG_LEVEL
 });
+
+new (class CustomBot {
+  @bot.subscribe('notice-event-poke', false)
+  public listenPokeMsg(bot: QQBot, msg: PokeNoticeWSMSG): void {
+    const sentMessage: Message[] = [
+      {
+        type: 'at',
+        data: {
+          qq: msg.user_id
+        }
+      },
+      {
+        type: 'text',
+        data: {
+          text: ' '
+        }
+      }
+    ];
+    Poke.processPokeMsg(bot, msg, sentMessage);
+    if (sentMessage.length > 2) {
+      if (msg.group_id) {
+        bot.sendGroupMsg(msg.group_id, sentMessage);
+      } else {
+        bot.sendPrivateMsg(msg.user_id, sentMessage);
+      }
+    }
+  }
+
+  @bot.subscribe('message-event-group', false)
+  public listenGroupMsg(bot: QQBot, msg: GroupMessageWSMSG): void {
+    const sentMessage: Message[] = [
+      {
+        type: 'reply',
+        data: {
+          id: msg.message_id
+        }
+      }
+    ];
+    ParenthesesMatching.parenthesesMatching(msg, sentMessage);
+    Github.processMessage(bot, msg, sentMessage).then(() => {
+      if (sentMessage.length > 1) {
+        bot.sendGroupMsg(msg.group_id, sentMessage);
+      }
+    });
+  }
+})();
 
 bot.start().then(bot => {
   const github = new Github(bot);

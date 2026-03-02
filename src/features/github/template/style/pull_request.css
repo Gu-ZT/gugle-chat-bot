@@ -17,6 +17,15 @@ body {
     padding-bottom: 0;
 }
 
+.message {
+    display: inline-block;
+}
+
+.user {
+    display: inline-block;
+    font-weight: bold;
+}
+
 .container {
     display: block;
     position: relative;
