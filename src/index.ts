@@ -7,13 +7,77 @@ import fs from 'node:fs';
 import dayjs from 'dayjs';
 import { LoggerFactory } from '@/logger';
 import { EventManager } from 'gugle-event';
-import { GroupMessageWSMSG, LoginInfo, LoginInfoData, Message, PokeNoticeWSMSG, SentMessage, WSMSG } from '@/type';
+import { GroupMessageWSMSG, LoginInfo, LoginInfoData, Message, SentMessage, WSMSG } from '@/type';
 import axios, { AxiosInstance } from 'axios';
-import { ParenthesesMatching } from '@/features/parentheses';
 import { Github } from '@/features/github';
-import { Poke } from '@/features/poke';
 import * as cron from 'node-cron';
 import { BotEvent, BotEventCancelable, EventCallback } from '@/type/event';
+import { CommandManager, CommandSource } from 'gugle-command';
+
+export class GroupMsgCommandSource implements CommandSource {
+  public readonly bot: QQBot;
+  public readonly msg: GroupMessageWSMSG;
+  private readonly replayMsg: Message[];
+
+  public constructor(bot: QQBot, msg: GroupMessageWSMSG) {
+    this.bot = bot;
+    this.msg = msg;
+    this.replayMsg = [
+      {
+        type: 'reply',
+        data: {
+          id: this.msg.message_id
+        }
+      }
+    ];
+  }
+
+  public success(message: string): void {
+    bot.sendGroupMsg(this.msg.group_id, [
+      ...this.replayMsg,
+      {
+        type: 'text',
+        data: {
+          text: message
+        }
+      }
+    ]);
+  }
+
+  public fail(message: string): void {
+    bot.sendGroupMsg(this.msg.group_id, [
+      ...this.replayMsg,
+      {
+        type: 'text',
+        data: {
+          text: message
+        }
+      }
+    ]);
+    bot.logger?.error(`[${this.msg.sender.nickname}|${this.msg.sender.user_id}] ${message}: ${this.msg.raw_message}`);
+  }
+
+  public getName(): string {
+    return this.msg.sender.nickname;
+  }
+
+  public hasPermission(permission: string): boolean {
+    if (!permission) return true;
+    const getPermissionLevel = (text: string): number => {
+      const level = Number.parseInt(text);
+      if (Number.isNaN(level)) {
+        return text === 'owner' ? 2 : text === 'admin' ? 1 : 0;
+      }
+      return Number.parseInt(text);
+    };
+    const permissionLevel: number = getPermissionLevel(this.msg.sender.role);
+    const needPermissionLevel: number = getPermissionLevel(permission);
+    bot.logger?.debug(
+      `permission: ${permission}, role: ${this.msg.sender.role}, permissionLevel: ${permissionLevel}, needPermissionLevel: ${needPermissionLevel}, ${permissionLevel >= needPermissionLevel}`
+    );
+    return permissionLevel >= needPermissionLevel;
+  }
+}
 
 export class QQBot {
   private loginInfo?: LoginInfoData = undefined;
@@ -23,6 +87,7 @@ export class QQBot {
   public readonly axiosInstance: AxiosInstance;
   private readonly ws: WebSocket;
   private readonly eventManager: EventManager;
+  private readonly commandManager: CommandManager;
   private wsOpened: boolean = false;
   private lastHeartbeatTime: number = 0;
   private checkHeartbeatFunc?: NodeJS.Timeout = undefined;
@@ -32,6 +97,7 @@ export class QQBot {
   public constructor(config: BotConfig) {
     this.config = config;
     this.eventManager = new EventManager();
+    this.commandManager = new CommandManager();
     this.ws = new WebSocket(`${Constants.WS_URL}/${Constants.TOKEN_PARAMS}${config.wsToken}`);
     this.axiosInstance = axios.create({
       timeout: 15000,
@@ -78,14 +144,16 @@ export class QQBot {
         }
         bot.logger = LoggerFactory.createLogger('QQBot', logPath, bot.config.logLevel || 'info');
         bot.logger.info(`QQ Bot starting...`);
-        bot.eventManager.listen('websocket-message', bot.onWebsocketMsg);
-        bot.eventManager.listen('meta-event-heartbeat', bot.onHeartbeat);
+        bot.listen('websocket-message', bot.onWebsocketMsg);
+        bot.listen('meta-event-heartbeat', bot.onHeartbeat);
+        bot.listen('message-event-group', bot.onGroupMsg);
         bot.ws.on('message', rawData => {
           bot.post('websocket-message', bot, rawData);
         });
         bot.getLoginInfo().then(loginInfo => {
           bot.loginInfo = loginInfo;
         });
+        bot.post('command-register', bot, this.commandManager).then();
         bot.post('after-start', bot).then();
         resolve(bot);
       });
@@ -103,7 +171,7 @@ export class QQBot {
     return this;
   }
 
-  public async post(event: string, ...args: any): Promise<any[]> {
+  public async post(event: BotEvent, ...args: any): Promise<any[]> {
     return await this.eventManager.post(event, ...args);
   }
 
@@ -133,6 +201,16 @@ export class QQBot {
     }
   }
 
+  public listen<T extends BotEvent, C extends BotEventCancelable>(
+    event: T,
+    callback: EventCallback<T, C>,
+    namespace: string = 'gugle-event',
+    priority: number = 100,
+    cancelable: C = false as C
+  ) {
+    this.eventManager.listen(event, callback, namespace, priority, cancelable);
+  }
+
   private onWebsocketMsg(bot: QQBot, data: RawData) {
     const msg: WSMSG = JSON.parse(data.toString('utf-8'));
     bot.logger?.debug(`Received message: ${JSON.stringify(msg)}`);
@@ -155,6 +233,13 @@ export class QQBot {
     bot.lastHeartbeatTime = Date.now();
     clearTimeout(bot.checkHeartbeatFunc);
     bot.checkHeartbeatFunc = setTimeout(() => bot.checkHeartbeat(bot), 40000);
+  }
+
+  private onGroupMsg(bot: QQBot, msg: GroupMessageWSMSG): void {
+    if (!Constants.FUNCTION_COMMAND_GROUP.includes(msg.group_id)) return;
+    const command = msg.raw_message;
+    if (!command.startsWith('/')) return;
+    bot.commandManager.execute(new GroupMsgCommandSource(bot, msg), command);
   }
 
   // ------------------------------------------------
@@ -271,51 +356,7 @@ export const bot = new QQBot({
   logLevel: Constants.LOG_LEVEL
 });
 
-new (class CustomBot {
-  @bot.subscribe('notice-event-poke', false)
-  public listenPokeMsg(bot: QQBot, msg: PokeNoticeWSMSG): void {
-    const sentMessage: Message[] = [
-      {
-        type: 'at',
-        data: {
-          qq: msg.user_id
-        }
-      },
-      {
-        type: 'text',
-        data: {
-          text: ' '
-        }
-      }
-    ];
-    Poke.processPokeMsg(bot, msg, sentMessage);
-    if (sentMessage.length > 2) {
-      if (msg.group_id) {
-        bot.sendGroupMsg(msg.group_id, sentMessage);
-      } else {
-        bot.sendPrivateMsg(msg.user_id, sentMessage);
-      }
-    }
-  }
-
-  @bot.subscribe('message-event-group', false)
-  public listenGroupMsg(bot: QQBot, msg: GroupMessageWSMSG): void {
-    const sentMessage: Message[] = [
-      {
-        type: 'reply',
-        data: {
-          id: msg.message_id
-        }
-      }
-    ];
-    ParenthesesMatching.parenthesesMatching(msg, sentMessage);
-    Github.processMessage(bot, msg, sentMessage).then(() => {
-      if (sentMessage.length > 1) {
-        bot.sendGroupMsg(msg.group_id, sentMessage);
-      }
-    });
-  }
-})();
+require('@/custom');
 
 bot.start().then(bot => {
   const github = new Github(bot);
