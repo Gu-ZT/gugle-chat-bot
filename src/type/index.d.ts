@@ -198,3 +198,15 @@ export type PokeNoticeWSMSG = NoticeWSMSG & {
 export type AllNoticeWSMSG = PokeNoticeWSMSG;
 
 export type WSMSG = AllMetaEventWSMSG | AllMessageWSMSG | AllNoticeWSMSG;
+
+export interface LoginInfoData {
+  user_id: number;
+  nickname: string;
+}
+
+export interface LoginInfo {
+  retcode: number;
+  data: LoginInfoData;
+  message: string;
+  wording: string;
+}

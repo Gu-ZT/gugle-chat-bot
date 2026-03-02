@@ -7,13 +7,14 @@ import fs from 'node:fs';
 import dayjs from 'dayjs';
 import { LoggerFactory } from '@/logger';
 import { EventManager } from 'gugle-event';
-import { GroupMessageWSMSG, Message, PokeNoticeWSMSG, SentMessage, WSMSG } from '@/type';
+import { GroupMessageWSMSG, LoginInfo, LoginInfoData, Message, PokeNoticeWSMSG, SentMessage, WSMSG } from '@/type';
 import axios, { AxiosInstance } from 'axios';
 import { ParenthesesMatching } from '@/features/parentheses';
 import { Github } from '@/features/github';
 import { Poke } from '@/features/poke';
 
 export class QQBot {
+  private loginInfo?: LoginInfoData = undefined;
   private path: string = process.cwd();
   logger?: Logger;
   private readonly config: BotConfig;
@@ -85,6 +86,9 @@ export class QQBot {
         }
         bot.ws.on('message', rawData => {
           bot.post('websocket-message', bot, rawData);
+        });
+        bot.getLoginInfo().then(loginInfo => {
+          bot.loginInfo = loginInfo;
         });
         bot.post('after-start', bot).then();
         resolve(bot);
@@ -194,6 +198,22 @@ export class QQBot {
         .then();
     });
   }
+
+  public getLoginInfo(): Promise<LoginInfoData> {
+    return new Promise<LoginInfoData>((resolve, reject) => {
+      if (!this.loginInfo) {
+        this.axiosInstance
+          .get<LoginInfo>(`/get_login_info`)
+          .then(res => resolve(res.data.data))
+          .catch(reject);
+      } else {
+        resolve(this.loginInfo);
+      }
+    });
+  }
+  public getLoginInfoSync(): LoginInfoData | undefined {
+    return this.loginInfo;
+  }
 }
 
 function listenGroupMsg(bot: QQBot, msg: GroupMessageWSMSG) {
@@ -241,7 +261,7 @@ function listenPokeMsg(bot: QQBot, msg: PokeNoticeWSMSG) {
 export const bot = new QQBot({
   wsToken: '',
   httpToken: '',
-  logLevel: 'debug',
+  logLevel: Constants.LOG_LEVEL,
   events: {
     'message-event-group': listenGroupMsg,
     'notice-event-poke': listenPokeMsg
