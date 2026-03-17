@@ -1,4 +1,7 @@
 export default class Constants {
+  public static readonly USER_AGENT =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0';
+
   // public static readonly LOG_LEVEL = 'info';
   // public static readonly HTTP_URL = 'http://127.0.0.1:3000';
   // public static readonly WS_URL = 'ws://127.0.0.1:3001';

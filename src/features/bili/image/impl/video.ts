@@ -15,9 +15,10 @@ export function videoHandler(bot: QQBot, viewData: ViewData, logger?: Logger): P
         viewData.owner.face = cover;
       })
     ]).then(() => {
+      const description = `<p>${viewData.desc.split('\n').join('</p>\n<p>')}</p>`;
       Template.load('video', 'src/features/bili/template')
         .arg('title', viewData.title)
-        .arg('description', viewData.desc)
+        .arg('description', description)
         .arg('cover', viewData.pic)
         .arg('avatar', viewData.owner.face)
         .arg('name', viewData.owner.name)

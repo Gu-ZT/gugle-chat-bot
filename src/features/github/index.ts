@@ -6,6 +6,7 @@ import { AllIssueEvent, AllPullRequestEvent, Issue, PullRequest } from '@/type/g
 import { GroupMessageWSMSG, Message, SentMessage, TextMessage } from '@/type';
 import { GitHubImage } from '@/features/github/image';
 import Constants from '@/constants';
+import axios, { AxiosInstance } from 'axios';
 
 export class Github {
   private readonly bot: QQBot;
@@ -30,6 +31,15 @@ export class Github {
     'https://gh.fhjhy.top/',
     'https://gh.sixyin.com/'
   ];
+
+  public static readonly axiosInstance: AxiosInstance = axios.create({
+    timeout: 15000,
+    baseURL: Constants.HTTP_URL,
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': Constants.USER_AGENT
+    }
+  });
 
   private static readonly GITHUB_API_BASE = 'https://api.github.com';
 
@@ -62,7 +72,7 @@ export class Github {
     bot.logger?.debug(`Trying proxy: ${proxy}`);
     bot.logger?.debug(`FULL URL: ${url}`);
 
-    return bot.axiosInstance
+    return Github.axiosInstance
       .get(url, { timeout: 10000 })
       .then(response => {
         bot.logger?.debug(`Successfully fetched from proxy: ${proxy}`);

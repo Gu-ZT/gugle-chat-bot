@@ -104,7 +104,8 @@ export class QQBot {
       baseURL: Constants.HTTP_URL,
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.httpToken}`
+        Authorization: `Bearer ${config.httpToken}`,
+        'User-Agent': Constants.USER_AGENT
       }
     });
     this.ws.on('error', (e: Error) => {
