@@ -60,6 +60,7 @@ export class Github {
     const proxy = Github.proxies[proxyIndex];
     const url = `${proxy}${Github.GITHUB_API_BASE}${apiPath}`;
     bot.logger?.debug(`Trying proxy: ${proxy}`);
+    bot.logger?.debug(`FULL URL: ${url}`);
 
     return bot.axiosInstance
       .get(url, { timeout: 10000 })
