@@ -5,4 +5,5 @@ node_modules/
 logs/
 git/
 config/
+reference/
 #github-logs/

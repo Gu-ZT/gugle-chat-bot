@@ -9,6 +9,7 @@ export default class Constants {
   // public static readonly FUNCTION_PARENTHESES_GROUP = [659356928];
   // public static readonly FUNCTION_POKE_GROUP = [659356928];
   // public static readonly FUNCTION_MINECRAFT_GROUP = [659356928];
+  // public static readonly FUNCTION_BILI_FOLLOW = [5930630, 19428259, 19822751, 430207683];
   // public static readonly FUNCTION_BILI_GROUP = [659356928];
 
   public static readonly LOG_LEVEL = 'debug';
@@ -21,5 +22,6 @@ export default class Constants {
   public static readonly FUNCTION_PARENTHESES_GROUP = [703453948];
   public static readonly FUNCTION_POKE_GROUP = [703453948];
   public static readonly FUNCTION_MINECRAFT_GROUP = [703453948];
+  public static readonly FUNCTION_BILI_FOLLOW = [5930630, 19428259, 19822751, 430207683];
   public static readonly FUNCTION_BILI_GROUP = [703453948];
 }

@@ -1,4 +1,4 @@
-import { bot, QQBot } from '@/index';
+import { bot, GroupMsgCommandSource, QQBot } from '@/index';
 import { GroupMessageWSMSG, Message, PokeNoticeWSMSG } from '@/type';
 import { ParenthesesMatching } from '@/features/parentheses';
 import { Github } from '@/features/github';
@@ -7,6 +7,7 @@ import { Arguments, CommandManager, CommandSource } from 'gugle-command';
 import { MinecraftAPI } from '@/features/minecraft';
 import { EventDataManager } from '@/event';
 import Constants from '@/constants';
+import { Bili } from '@/features/bili';
 
 class CustomBot {
   public static helpCommand(source: CommandSource) {
@@ -96,9 +97,11 @@ ${wiki.url}`);
     ];
     ParenthesesMatching.parenthesesMatching(msg, sentMessage);
     Github.processMessage(bot, msg, sentMessage).then(() => {
-      if (sentMessage.length > 1) {
-        bot.sendGroupMsg(msg.group_id, sentMessage);
-      }
+      Bili.processMessage(bot, msg, sentMessage).then(() => {
+        if (sentMessage.length > 1) {
+          bot.sendGroupMsg(msg.group_id, sentMessage);
+        }
+      });
     });
   }
 
@@ -123,7 +126,7 @@ ${wiki.url}`);
   }
 
   @bot.cron('0/30 * * * * *')
-  public test() {
+  public cronCheckMinecraftVersion() {
     MinecraftAPI.getVersion().then(version => {
       if (!version.success) return;
       EventDataManager.getStorage('mcupdate', 'latest').then((latest: { release: string; snapshot: string }) => {

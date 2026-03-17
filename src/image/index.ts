@@ -66,7 +66,8 @@ function imageToBase64(image: Buffer<ArrayBufferLike>) {
 export function tryGenerateImage(
   resolve: (value: string | PromiseLike<string>) => void,
   reject: (reason?: any) => void,
-  html: string
+  html: string,
+  width: number = 820
 ) {
   try {
     nodeHtmlToImage({
@@ -74,7 +75,7 @@ export function tryGenerateImage(
       puppeteerArgs: {
         executablePath: Constants.CHROME_PATH,
         defaultViewport: {
-          width: 820,
+          width: width,
           height: 1
         },
         timeout: 60000,
