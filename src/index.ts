@@ -220,7 +220,7 @@ export class QQBot {
       eventName = `meta-event-${msg.meta_event_type}`;
     }
     if (msg.post_type == 'message') {
-      eventName = ` message-event-${msg.message_type}`;
+      eventName = `message-event-${msg.message_type}`;
     }
     if (msg.post_type == 'notice') {
       eventName = `notice-event-${msg.notice_type}`;
