@@ -215,18 +215,22 @@ export class QQBot {
   private onWebsocketMsg(bot: QQBot, data: RawData) {
     const msg: WSMSG = JSON.parse(data.toString('utf-8'));
     bot.logger?.debug(`Received message: ${JSON.stringify(msg)}`);
+    let eventName = 'unknown-event';
     if (msg.post_type == 'meta_event') {
-      bot.logger?.debug(`post meta event: meta-event-${msg.meta_event_type}`);
-      bot.post(`meta-event-${msg.meta_event_type}`, bot, msg).then();
+      eventName = `meta-event-${msg.meta_event_type}`;
     }
     if (msg.post_type == 'message') {
-      bot.logger?.debug(`post message event: message-event-${msg.message_type}`);
-      bot.post(`message-event-${msg.message_type}`, bot, msg).then();
+      eventName = ` message-event-${msg.message_type}`;
     }
-    if (msg.post_type == 'notice' && msg.notice_type == 'notify') {
-      bot.logger?.debug(`post notice event: notice-event-${msg.sub_type}`);
-      bot.post(`notice-event-${msg.sub_type}`, bot, msg).then();
+    if (msg.post_type == 'notice') {
+      eventName = `notice-event-${msg.notice_type}`;
     }
+    if (msg.post_type == 'request') {
+      eventName = `request-event-${msg.request_type}`;
+    }
+    eventName = eventName.toLowerCase().replace(/_/g, '-');
+    bot.logger?.debug(`post notice event: ${eventName}`);
+    bot.post(eventName, bot, msg).then();
   }
 
   private onHeartbeat(bot: QQBot, data: RawData) {
@@ -320,15 +324,31 @@ export class QQBot {
     });
   }
 
+  // 设置禁言
   public ban(groupId: number, userId: number, duration: number) {
     const bot = this;
     this.operation(() => {
-      bot.logger?.debug(`ban ${userId} in group ${groupId} for ${duration} seconds`);
+      bot.logger?.info(`ban ${userId} in group ${groupId} for ${duration} seconds`);
       bot.axiosInstance
         .post(`/set_group_ban`, {
           group_id: `${groupId}`,
           user_id: `${userId}`,
           duration: duration
+        })
+        .then();
+    });
+  }
+
+  // 踢出群聊
+  public kick(groupId: number, userId: number) {
+    const bot = this;
+    this.operation(() => {
+      bot.logger?.info(`kick ${userId} in group`);
+      bot.axiosInstance
+        .post(`/set_group_kick`, {
+          group_id: `${groupId}`,
+          user_id: `${userId}`,
+          reject_add_request: false
         })
         .then();
     });
@@ -346,8 +366,50 @@ export class QQBot {
       }
     });
   }
+
+  public getUserInfo(userId: number) {
+    const bot = this;
+    return new Promise<{ user_id: string; nickname: string; qid: string }>((resolve, reject) => {
+      this.operation(() => {
+        bot.axiosInstance
+          .post(`/get_stranger_info`, {
+            user_id: `${userId}`
+          })
+          .then(res => resolve(res.data.data))
+          .then();
+      });
+    });
+  }
+
   public getLoginInfoSync(): LoginInfoData | undefined {
     return this.loginInfo;
+  }
+
+  public approveGroupAddRequest(flag: string) {
+    const bot = this;
+    this.operation(() => {
+      bot.axiosInstance
+        .post(`/set_group_add_request`, {
+          flag: flag,
+          sub_type: 'add',
+          approve: true
+        })
+        .then();
+    });
+  }
+
+  public denyGroupAddRequest(flag: string, reason?: string) {
+    const bot = this;
+    this.operation(() => {
+      bot.axiosInstance
+        .post(`/set_group_add_request`, {
+          flag: flag,
+          sub_type: 'add',
+          approve: false,
+          reason: reason
+        })
+        .then();
+    });
   }
 }
 

@@ -186,18 +186,52 @@ export type NoticeWSMSG = {
   post_type: 'notice';
 };
 
-export type PokeNoticeWSMSG = NoticeWSMSG & {
+export type NotifyNoticeWSMSG = NoticeWSMSG & {
   notice_type: 'notify';
-  sub_type: 'poke';
+  sub_type: 'poke' | string;
   group_id?: number;
   target_id: number;
   self_id: number;
   user_id: number;
 };
 
-export type AllNoticeWSMSG = PokeNoticeWSMSG;
+export type GroupDecreaseNoticeWSMSG = NoticeWSMSG & {
+  notice_type: 'group_decrease';
+  self_id: number;
+  group_id: number;
+  user_id: number;
+  sub_type: 'kick' | 'leave';
+  operator_id: number;
+};
 
-export type WSMSG = AllMetaEventWSMSG | AllMessageWSMSG | AllNoticeWSMSG;
+export type GroupIncreaseNoticeWSMSG = NoticeWSMSG & {
+  notice_type: 'group_increase';
+  self_id: number;
+  group_id: number;
+  user_id: number;
+  sub_type: 'invite' | 'approve';
+  operator_id: number;
+};
+
+export type AllNoticeWSMSG = NotifyNoticeWSMSG | GroupDecreaseNoticeWSMSG | GroupIncreaseNoticeWSMSG;
+
+export type RequestWSMSG = {
+  post_type: 'request';
+};
+
+export type GroupRequestWSMSG = RequestWSMSG & {
+  request_type: 'group';
+  self_id: number;
+  group_id: number;
+  user_id: number;
+  comment: string;
+  flag: string;
+  sub_type: 'add';
+};
+
+export type AllRequestWSMSG = GroupRequestWSMSG;
+
+export type WSMSG = AllMetaEventWSMSG | AllMessageWSMSG | AllNoticeWSMSG | AllRequestWSMSG;
 
 export interface LoginInfoData {
   user_id: number;

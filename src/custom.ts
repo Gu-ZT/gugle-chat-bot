@@ -1,5 +1,12 @@
-import { bot, GroupMsgCommandSource, QQBot } from '@/index';
-import { GroupMessageWSMSG, Message, PokeNoticeWSMSG } from '@/type';
+import { bot, QQBot } from '@/index';
+import {
+  GroupDecreaseNoticeWSMSG,
+  GroupIncreaseNoticeWSMSG,
+  GroupMessageWSMSG,
+  GroupRequestWSMSG,
+  Message,
+  NotifyNoticeWSMSG
+} from '@/type';
 import { ParenthesesMatching } from '@/features/parentheses';
 import { Github } from '@/features/github';
 import { Poke } from '@/features/poke';
@@ -8,6 +15,7 @@ import { MinecraftAPI } from '@/features/minecraft';
 import { EventDataManager } from '@/event';
 import Constants from '@/constants';
 import { Bili } from '@/features/bili';
+import { Management } from '@/features/management';
 
 class CustomBot {
   public static helpCommand(source: CommandSource) {
@@ -59,8 +67,9 @@ ${wiki.url}`);
     });
   }
 
-  @bot.subscribe('notice-event-poke', false)
-  public listenPokeMsg(bot: QQBot, msg: PokeNoticeWSMSG): void {
+  @bot.subscribe('notice-event-notify', false)
+  public listenPokeMsg(bot: QQBot, msg: NotifyNoticeWSMSG): void {
+    if (!msg.sub_type || msg.sub_type != 'poke') return;
     const sentMessage: Message[] = [
       {
         type: 'at',
@@ -103,6 +112,21 @@ ${wiki.url}`);
         }
       });
     });
+  }
+
+  @bot.subscribe('notice-event-group-decrease', false)
+  public listenGroupDecreaseNotice(bot: QQBot, msg: GroupDecreaseNoticeWSMSG): void {
+    Management.handleGroupDecreaseNotice(bot, msg);
+  }
+
+  @bot.subscribe('notice-event-group-increase', false)
+  public listenGroupIncreaseNotice(bot: QQBot, msg: GroupIncreaseNoticeWSMSG): void {
+    Management.handleGroupIncreaseNotice(bot, msg);
+  }
+
+  @bot.subscribe('request-event-group', false)
+  public listenGroupRequest(bot: QQBot, msg: GroupRequestWSMSG): void {
+    Management.handleGroupRequest(bot, msg);
   }
 
   @bot.subscribe('command-register', false)
@@ -164,10 +188,17 @@ ${wiki.url}`);
               text: `· 最新快照版：${version.latest.snapshot}\n`
             }
           });
+          let snapshot = version.latest.snapshot;
+          if (snapshot.includes('pre')) {
+            snapshot = snapshot.replace('pre', 'pre-release');
+          } else if (snapshot.includes('rc')) {
+            snapshot = snapshot.replace('rc', 'release-candidate');
+          }
+          snapshot = snapshot.replace('.', '-');
           msg.push({
             type: 'text',
             data: {
-              text: `https://www.minecraft.net/en-us/article/minecraft-${version.latest.snapshot.replace('.', '-')}`
+              text: `https://www.minecraft.net/en-us/article/minecraft-${snapshot}`
             }
           });
         } else {

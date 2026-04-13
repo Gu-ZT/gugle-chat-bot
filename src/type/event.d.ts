@@ -1,6 +1,13 @@
 import { Cancelable } from 'gugle-event';
 import { QQBot } from '@/index';
-import { GroupMessageWSMSG, PokeNoticeWSMSG, PrivateMessageWSMSG } from '@/type/index';
+import {
+  GroupDecreaseNoticeWSMSG,
+  GroupIncreaseNoticeWSMSG,
+  GroupMessageWSMSG,
+  GroupRequestWSMSG,
+  NotifyNoticeWSMSG,
+  PrivateMessageWSMSG
+} from '@/type/index';
 import { RawData } from 'ws';
 import { CommandManager } from 'gugle-command';
 
@@ -27,9 +34,18 @@ export declare type BotRuntimeEvent =
  */
 export declare type GroupMessageEvent = 'message-event-group';
 export declare type PrivateMessageEvent = 'message-event-private';
-export declare type PokeNoticeEvent = 'notice-event-poke';
+export declare type NotifyNoticeEvent = 'notice-event-notify';
+export declare type GroupDecreaseNoticeEvent = 'notice-event-group-decrease';
+export declare type GroupIncreaseNoticeEvent = 'notice-event-group-increase';
+export declare type GroupRequestEvent = 'request-event-group';
 
-export declare type QQEvent = GroupMessageEvent | PrivateMessageEvent | PokeNoticeEvent;
+export declare type QQEvent =
+  | GroupMessageEvent
+  | PrivateMessageEvent
+  | NotifyNoticeEvent
+  | GroupDecreaseNoticeEvent
+  | GroupIncreaseNoticeEvent
+  | GroupRequestEvent;
 
 /**
  * 定义机器人所有事件类型的元组
@@ -74,25 +90,43 @@ declare type PrivateMessageEventCallback<C extends BotEventCancelable> = C exten
   ? (cancelable: Cancelable, bot: QQBot, message: PrivateMessageWSMSG) => void
   : (bot: QQBot, message: PrivateMessageWSMSG) => void;
 
-declare type PokeNoticeEventCallback<C extends BotEventCancelable> = C extends true
-  ? (cancelable: Cancelable, bot: QQBot, message: PokeNoticeWSMSG) => void
-  : (bot: QQBot, message: PokeNoticeWSMSG) => void;
+declare type NotifyNoticeEventCallback<C extends BotEventCancelable> = C extends true
+  ? (cancelable: Cancelable, bot: QQBot, message: NotifyNoticeWSMSG) => void
+  : (bot: QQBot, message: NotifyNoticeWSMSG) => void;
+
+declare type GroupDecreaseNoticeEventCallback<C extends BotEventCancelable> = C extends true
+  ? (cancelable: Cancelable, bot: QQBot, message: GroupDecreaseNoticeWSMSG) => void
+  : (bot: QQBot, message: GroupDecreaseNoticeWSMSG) => void;
+
+declare type GroupIncreaseNoticeEventCallback<C extends BotEventCancelable> = C extends true
+  ? (cancelable: Cancelable, bot: QQBot, message: GroupIncreaseNoticeWSMSG) => void
+  : (bot: QQBot, message: GroupIncreaseNoticeWSMSG) => void;
+
+declare type GroupRequestEventCallback<C extends BotEventCancelable> = C extends true
+  ? (cancelable: Cancelable, bot: QQBot, message: GroupRequestWSMSG) => void
+  : (bot: QQBot, message: GroupRequestWSMSG) => void;
 
 export type GeneralEventCallback<T extends BotEvent, C extends BotEventCancelable> = C extends true
   ? (cancelable: Cancelable, ...args: any) => void
   : (...args: any) => void;
 
 /**
- * 定义HeyBox事件的回调函数类型
+ * 定义QQ事件的回调函数类型
  * 根据事件类型和是否可取消，决定回调函数的参数和返回类型
  */
 export declare type QQEventCallback<T extends QQEvent, C extends BotEventCancelable> = T extends GroupMessageEvent
   ? GroupMessageEventCallback<C>
   : T extends PrivateMessageEvent
     ? PrivateMessageEventCallback<C>
-    : T extends PokeNoticeEvent
-      ? PokeNoticeEventCallback<C>
-      : GeneralEventCallback<T, C>;
+    : T extends NotifyNoticeEvent
+      ? NotifyNoticeEventCallback<C>
+      : T extends GroupDecreaseNoticeEvent
+        ? GroupDecreaseNoticeEventCallback<C>
+        : T extends GroupIncreaseNoticeEvent
+          ? GroupIncreaseNoticeEventCallback<C>
+          : T extends GroupRequestEvent
+            ? GroupRequestEventCallback<C>
+            : GeneralEventCallback<T, C>;
 
 declare type WebSocketMessageEventCallback<
   T extends WebSocketMessageEvent,

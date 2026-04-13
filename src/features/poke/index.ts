@@ -1,10 +1,10 @@
-import { Message, PokeNoticeWSMSG } from '@/type';
+import { Message, NotifyNoticeWSMSG } from '@/type';
 import { QQBot } from '@/index';
 import Constants from '@/constants';
 import dayjs from 'dayjs';
 
 export class Poke {
-  public static processPokeMsg(bot: QQBot, msg: PokeNoticeWSMSG, sentMessage: Message[]) {
+  public static processPokeMsg(bot: QQBot, msg: NotifyNoticeWSMSG, sentMessage: Message[]) {
     const hour = dayjs().hour();
     if (hour > 7 && hour < 21) return;
     if (!msg.group_id || !Constants.FUNCTION_POKE_GROUP.includes(msg.group_id)) return;
