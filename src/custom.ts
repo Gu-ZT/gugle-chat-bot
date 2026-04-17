@@ -12,6 +12,7 @@ import { Github } from '@/features/github';
 import { Poke } from '@/features/poke';
 import { Arguments, CommandManager, CommandSource } from 'gugle-command';
 import { MinecraftAPI } from '@/features/minecraft';
+import { ModrinthAPI } from '@/features/modrinth';
 import { EventDataManager } from '@/event';
 import Constants from '@/constants';
 import { Bili } from '@/features/bili';
@@ -207,6 +208,37 @@ ${wiki.url}`);
         if (needWrite) EventDataManager.setStorage('mcupdate', 'latest', version.latest).then();
         for (const listener of Constants.FUNCTION_MINECRAFT_GROUP) {
           bot.sendGroupMsg(listener, msg);
+        }
+      });
+    });
+  }
+
+  @bot.cron('0/30 * * * * *')
+  public cronCheckAeronauticsVersion() {
+    ModrinthAPI.getAeronauticsVersion().then(version => {
+      EventDataManager.getStorage('aeronautics', 'latest').then((latest: string) => {
+        // If current request succeeds but previous failed, or version changed
+        if (version.success && (!latest || latest !== version.latest)) {
+          const msg: Message[] = [
+            {
+              type: 'text',
+              data: {
+                text: `航空学更新了！最新版本：${version.latest}`
+              }
+            }
+          ];
+          EventDataManager.setStorage('aeronautics', 'latest', version.latest).then();
+          for (const listener of Constants.FUNCTION_MODRINTH_GROUP) {
+            bot.sendGroupMsg(listener, msg);
+          }
+        }
+        // If current request fails but we had a previous success, reset the storage
+        else if (!version.success && latest) {
+          EventDataManager.setStorage('aeronautics', 'latest', '').then();
+        }
+        // If first time successful, just store it
+        else if (version.success && !latest) {
+          EventDataManager.setStorage('aeronautics', 'latest', version.latest).then();
         }
       });
     });
