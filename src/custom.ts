@@ -215,33 +215,7 @@ ${wiki.url}`);
 
   @bot.cron('0/30 * * * * *')
   public cronCheckAeronauticsVersion() {
-    ModrinthAPI.getAeronauticsVersion().then(version => {
-      EventDataManager.getStorage('aeronautics', 'latest').then((latest: string) => {
-        // If current request succeeds but previous failed, or version changed
-        if (version.success && (!latest || latest !== version.latest)) {
-          const msg: Message[] = [
-            {
-              type: 'text',
-              data: {
-                text: `航空学更新了！最新版本：${version.latest}`
-              }
-            }
-          ];
-          EventDataManager.setStorage('aeronautics', 'latest', version.latest).then();
-          for (const listener of Constants.FUNCTION_MODRINTH_GROUP) {
-            bot.sendGroupMsg(listener, msg);
-          }
-        }
-        // If current request fails but we had a previous success, reset the storage
-        else if (!version.success && latest) {
-          EventDataManager.setStorage('aeronautics', 'latest', '').then();
-        }
-        // If first time successful, just store it
-        else if (version.success && !latest) {
-          EventDataManager.setStorage('aeronautics', 'latest', version.latest).then();
-        }
-      });
-    });
+    ModrinthAPI.checkVersion(bot, 'create-aeronautics', '航空学');
   }
 }
 

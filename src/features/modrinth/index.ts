@@ -1,4 +1,8 @@
 import axios, { AxiosResponse } from 'axios';
+import { EventDataManager } from '@/event';
+import { Message } from '@/type';
+import Constants from '@/constants';
+import { QQBot } from '@/index';
 
 export declare type ModrinthVersion = {
   success: boolean;
@@ -6,12 +10,11 @@ export declare type ModrinthVersion = {
 };
 
 export class ModrinthAPI {
-  private static readonly AERONAUTICS_METADATA_URL: string =
-    'https://api.modrinth.com/maven/maven/modrinth/create-aeronautics/maven-metadata.xml';
-
-  public static async getAeronauticsVersion(): Promise<ModrinthVersion> {
+  public static async getModVersion(slug: string): Promise<ModrinthVersion> {
     try {
-      const res: AxiosResponse<string> = await axios.get(ModrinthAPI.AERONAUTICS_METADATA_URL);
+      const res: AxiosResponse<string> = await axios.get(
+        `https://api.modrinth.com/maven/maven/modrinth/${slug}/maven-metadata.xml`
+      );
       const xml = res.data;
 
       // Parse XML to extract latest version
@@ -33,5 +36,37 @@ export class ModrinthAPI {
         latest: ''
       };
     }
+  }
+
+  public static checkVersion(bot: QQBot, slug: string, name: string) {
+    ModrinthAPI.getModVersion(slug).then(version => {
+      EventDataManager.getStorage(slug, 'latest').then((latest: string) => {
+        // If current request succeeds but previous failed, or version changed
+        if (version.success && (!latest || latest !== version.latest)) {
+          const msg: Message[] = [
+            {
+              type: 'text',
+              data: {
+                text: `${name}更新了！
+· 最新版本：${version.latest}
+· 下载直链：https://api.modrinth.com/maven/maven/modrinth/${slug}/${version.latest}/${slug}-${version.latest}.jar`
+              }
+            }
+          ];
+          EventDataManager.setStorage(slug, 'latest', version.latest).then();
+          for (const listener of Constants.FUNCTION_MODRINTH_GROUP) {
+            bot.sendGroupMsg(listener, msg);
+          }
+        }
+        // If current request fails but we had a previous success, reset the storage
+        else if (!version.success && latest) {
+          EventDataManager.setStorage(slug, 'latest', '').then();
+        }
+        // If first time successful, just store it
+        else if (version.success && !latest) {
+          EventDataManager.setStorage(slug, 'latest', version.latest).then();
+        }
+      });
+    });
   }
 }
