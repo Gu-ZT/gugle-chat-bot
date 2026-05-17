@@ -73,7 +73,6 @@ export function tryGenerateImage(
     nodeHtmlToImage({
       html: html,
       puppeteerArgs: {
-        executablePath: Constants.CHROME_PATH,
         defaultViewport: {
           width: width,
           height: 1

@@ -213,10 +213,10 @@ ${wiki.url}`);
     });
   }
 
-  @bot.cron('0/30 * * * * *')
-  public cronCheckAeronauticsVersion() {
-    ModrinthAPI.checkVersion(bot, 'create-aeronautics', '航空学');
-  }
+  // @bot.cron('0/30 * * * * *')
+  // public cronCheckAeronauticsVersion() {
+  //   ModrinthAPI.checkVersion(bot, 'create-aeronautics', '航空学');
+  // }
 }
 
 export default function run() {
