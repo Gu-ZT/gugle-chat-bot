@@ -90,8 +90,7 @@ export function tryGenerateImage(
         ]
       },
       type: 'png',
-      timeout: 60000,
-      waitUntil: 'domcontentloaded'
+      timeout: 60000
     })
       .then(image => {
         // const outputPath = path.join(process.cwd(), 'output.png');
