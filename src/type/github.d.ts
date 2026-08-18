@@ -32,6 +32,8 @@ export interface Issue {
   type: string;
   user: User;
   created_at: string;
+  html_url?: string;
+  repository_url?: string;
 }
 
 export interface PullRequest {
@@ -48,6 +50,8 @@ export interface PullRequest {
   merged: boolean;
   draft?: boolean;
   created_at: string;
+  html_url?: string;
+  repository_url?: string;
 }
 
 export interface Organization {

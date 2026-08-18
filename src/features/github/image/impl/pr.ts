@@ -4,6 +4,17 @@ import { Template, tryGenerateImage } from '@/image';
 import { renderMarkdown } from '@/features/github/image';
 import dayjs from 'dayjs';
 
+function getRepositoryParts(repositoryUrl?: string, htmlUrl?: string): { owner: string; name: string } {
+  const url = repositoryUrl || htmlUrl;
+  if (!url) return { owner: 'GitHub', name: '' };
+  const parts = url.split('/').filter(Boolean);
+  const githubIndex = parts.indexOf('github.com');
+  const repositoryParts = githubIndex >= 0 ? parts.slice(githubIndex + 1, githubIndex + 3) : parts.slice(-2);
+  return repositoryParts.length === 2
+    ? { owner: repositoryParts[0]!, name: repositoryParts[1]! }
+    : { owner: 'GitHub', name: '' };
+}
+
 export function getPullRequestState(pr: PullRequest): string {
   if (pr.state == 'open') {
     if (pr.draft) {
@@ -85,6 +96,8 @@ export function prHandler(pr: PullRequest, logger?: Logger, operation?: string, 
   return new Promise<string>((resolve, reject) => {
     Template.load('pull_request', 'src/features/github/template')
       .arg('header extra', headerExtra || '')
+      .arg('repository owner', getRepositoryParts(pr.repository_url, pr.html_url).owner)
+      .arg('repository name', getRepositoryParts(pr.repository_url, pr.html_url).name)
       .arg('pr number', pr.number)
       .arg('pr title', pr.title)
       .arg('pr body', renderMarkdown(pr.body))

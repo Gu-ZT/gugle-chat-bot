@@ -4,6 +4,17 @@ import { Template, tryGenerateImage } from '@/image';
 import dayjs from 'dayjs';
 import { renderMarkdown } from '@/features/github/image';
 
+function getRepositoryParts(repositoryUrl?: string, htmlUrl?: string): { owner: string; name: string } {
+  const url = repositoryUrl || htmlUrl;
+  if (!url) return { owner: 'GitHub', name: '' };
+  const parts = url.split('/').filter(Boolean);
+  const githubIndex = parts.indexOf('github.com');
+  const repositoryParts = githubIndex >= 0 ? parts.slice(githubIndex + 1, githubIndex + 3) : parts.slice(-2);
+  return repositoryParts.length === 2
+    ? { owner: repositoryParts[0]!, name: repositoryParts[1]! }
+    : { owner: 'GitHub', name: '' };
+}
+
 function getIssueState(issue: Issue): string {
   if (issue.state == 'open') {
     return `
@@ -66,6 +77,8 @@ export function issuesHandler(issue: Issue, logger?: Logger, operation?: string,
   return new Promise<string>((resolve, reject) => {
     Template.load('issue', 'src/features/github/template')
       .arg('header extra', headerExtra || '')
+      .arg('repository owner', getRepositoryParts(issue.repository_url, issue.html_url).owner)
+      .arg('repository name', getRepositoryParts(issue.repository_url, issue.html_url).name)
       .arg('issue number', issue.number)
       .arg('state label', getIssueState(issue))
       .arg('issue title', issue.title)

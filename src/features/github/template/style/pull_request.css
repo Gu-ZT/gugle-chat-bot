@@ -27,6 +27,52 @@ body {
     font-weight: bold;
 }
 
+.repository_header {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    min-height: 52px;
+    padding: .7rem 1.25rem;
+    color: #f0f6fc;
+    background: #161b22;
+    font-size: 1rem;
+    line-height: 1.25;
+    overflow: hidden;
+}
+
+.repository_mark {
+    width: 22px;
+    height: 22px;
+    flex: 0 0 auto;
+    fill: currentColor;
+}
+
+.repository_owner,
+.repository_name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.repository_owner {
+    color: #c9d1d9;
+}
+
+.repository_separator {
+    color: #8b949e;
+}
+
+.repository_name {
+    color: #f0f6fc;
+}
+
+.repository_chevron {
+    margin-left: .15rem;
+    color: #8b949e;
+    font-size: 1.1rem;
+    line-height: 1;
+}
+
 .container {
     display: block;
     position: relative;
