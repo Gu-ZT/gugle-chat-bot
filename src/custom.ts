@@ -1,4 +1,4 @@
-import { bot, QQBot } from '@/index';
+import { bot, GroupMsgCommandSource, QQBot } from '@/index';
 import {
   GroupDecreaseNoticeWSMSG,
   GroupIncreaseNoticeWSMSG,
