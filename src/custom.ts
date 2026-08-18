@@ -9,6 +9,7 @@ import {
 } from '@/type';
 import { ParenthesesMatching } from '@/features/parentheses';
 import { Github } from '@/features/github';
+import { GitHubBindingManager } from '@/features/github/binding';
 import { Poke } from '@/features/poke';
 import { Arguments, CommandManager, CommandSource } from 'gugle-command';
 import { MinecraftAPI } from '@/features/minecraft';
@@ -23,7 +24,8 @@ class CustomBot {
     source.success(`帮助
 · /mcv：获取 Minecraft 版本信息
 · /server <ip> <port?>：获取 Minecraft 服务器状态
-· /wiki <query>：搜索 Minecraft 维基`);
+· /wiki <query>：搜索 Minecraft 维基
+· /github bind <Username>：绑定 GitHub 用户名`);
   }
 
   public static minecraftVersionCommand(source: CommandSource) {
@@ -66,6 +68,25 @@ class CustomBot {
 ${wiki.desc}
 ${wiki.url}`);
     });
+  }
+
+  public static githubBindCommand(source: CommandSource, username: string) {
+    if (!(source instanceof GroupMsgCommandSource)) {
+      source.fail('GitHub 绑定仅支持在群聊中使用');
+      return;
+    }
+
+    GitHubBindingManager.bind(source.msg.sender.user_id, username)
+      .then(result => {
+        if (result.state === 'bound') {
+          source.success(`GitHub 用户 ${username} 绑定成功`);
+          return;
+        }
+        source.success(`请在 GitHub 用户 ${username} 的 Bio 中添加验证码：${result.code}\n添加后再次执行 /github bind ${username}`);
+      })
+      .catch(error => {
+        source.fail(error instanceof Error ? error.message : String(error));
+      });
   }
 
   @bot.subscribe('notice-event-notify', false)
@@ -146,6 +167,14 @@ ${wiki.url}`);
       'gugle-command',
       CommandManager.literal('wiki').then(
         CommandManager.argument('query', Arguments.STRING).execute(CustomBot.wikiCommand)
+      )
+    );
+    command.register(
+      'gugle-command',
+      CommandManager.literal('github').then(
+        CommandManager.literal('bind').then(
+          CommandManager.argument('username', Arguments.STRING).execute(CustomBot.githubBindCommand)
+        )
       )
     );
   }

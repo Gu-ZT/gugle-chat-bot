@@ -6,6 +6,7 @@ import { AllIssueEvent, AllPullRequestEvent, Issue, PullRequest } from '@/type/g
 import { GroupMessageWSMSG, Message, SentMessage, TextMessage } from '@/type';
 import { GitHubImage } from '@/features/github/image';
 import { botConfig } from '@/config';
+import { GitHubBindingManager } from '@/features/github/binding';
 import axios, { AxiosInstance } from 'axios';
 
 export class Github {
@@ -173,6 +174,9 @@ export class Github {
   }
 
   private static isAllowedRepository(repository: string): boolean {
+    const [owner] = repository.split('/');
+    if (owner && GitHubBindingManager.isBoundUsername(owner)) return true;
+
     return botConfig.githubAllowedRepositories.some(pattern => {
       if (pattern.endsWith('/*')) return repository.startsWith(`${pattern.slice(0, -2)}/`);
       return repository === pattern;
