@@ -5,7 +5,7 @@ import { QQBot } from '@/index';
 import { AllIssueEvent, AllPullRequestEvent, Issue, PullRequest } from '@/type/github';
 import { GroupMessageWSMSG, Message, SentMessage, TextMessage } from '@/type';
 import { GitHubImage } from '@/features/github/image';
-import Constants from '@/constants';
+import { botConfig } from '@/config';
 import axios, { AxiosInstance } from 'axios';
 
 export class Github {
@@ -34,10 +34,10 @@ export class Github {
 
   public static readonly axiosInstance: AxiosInstance = axios.create({
     timeout: 15000,
-    baseURL: Constants.HTTP_URL,
+    baseURL: botConfig.httpUrl,
     headers: {
       'Content-Type': 'application/json',
-      'User-Agent': Constants.USER_AGENT
+      'User-Agent': botConfig.userAgent
     }
   });
 
@@ -151,7 +151,7 @@ export class Github {
             }
           }
         ];
-        Constants.FUNCTION_GITHUB_GROUP.forEach(group => {
+        botConfig.functionGithubGroup.forEach(group => {
           bot.sendGroupMsg(group, msg);
         });
         this.logger?.debug(`Sent process ${type} message...`);
@@ -173,7 +173,7 @@ export class Github {
   }
 
   public static processMessage(bot: QQBot, msg: GroupMessageWSMSG, sentMessage: Message[]): Promise<void> {
-    if (!Constants.FUNCTION_GITHUB_GROUP.includes(msg.group_id)) return Promise.resolve();
+    if (!botConfig.functionGithubGroup.includes(msg.group_id)) return Promise.resolve();
 
     const receivedMessage: TextMessage[] = [];
     msg.message.forEach(message => {

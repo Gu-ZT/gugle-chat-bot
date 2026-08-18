@@ -4,6 +4,7 @@ node_modules/
 .idea/
 logs/
 git/
-config/
+/config/
+/configs/
 reference/
 #github-logs/

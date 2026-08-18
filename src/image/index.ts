@@ -1,6 +1,6 @@
 import nodeHtmlToImage from 'node-html-to-image';
 import fs from 'node:fs';
-import Constants from '@/constants';
+import { botConfig } from '@/config';
 
 export class Template {
   private readonly templatePath: string;
@@ -73,7 +73,7 @@ export function tryGenerateImage(
     nodeHtmlToImage({
       html: html,
       puppeteerArgs: {
-        executablePath: Constants.CHROME_PATH,
+        executablePath: botConfig.chromePath,
         defaultViewport: {
           width: width,
           height: 1

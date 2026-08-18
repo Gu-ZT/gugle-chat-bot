@@ -1,10 +1,10 @@
 import { QQBot } from '@/index';
 import { GroupDecreaseNoticeWSMSG, GroupIncreaseNoticeWSMSG, GroupRequestWSMSG } from '@/type';
 import { EventDataManager } from '@/event';
-import Constants from '@/constants';
+import { botConfig } from '@/config';
 
 function handleGroupDecreaseNotice(bot: QQBot, msg: GroupDecreaseNoticeWSMSG) {
-  if (!Constants.FUNCTION_MANAGEMENT_GROUP.includes(msg.group_id)) return;
+  if (!botConfig.functionManagementGroup.includes(msg.group_id)) return;
   EventDataManager.getStorage('management', 'ban_list').then((banList: number[]) => {
     if (!banList) banList = [];
     if (banList.includes(msg.user_id)) return;
@@ -26,11 +26,11 @@ function handleGroupDecreaseNotice(bot: QQBot, msg: GroupDecreaseNoticeWSMSG) {
 }
 
 function handleGroupIncreaseNotice(bot: QQBot, msg: GroupIncreaseNoticeWSMSG) {
-  if (!Constants.FUNCTION_MANAGEMENT_GROUP.includes(msg.group_id)) return;
+  if (!botConfig.functionManagementGroup.includes(msg.group_id)) return;
   EventDataManager.getStorage('management', 'ban_list').then((banList: number[]) => {
     if (!banList) return;
     if (banList.includes(msg.user_id)) {
-      if (msg.sub_type === 'invite' && Constants.FUNCTION_MANAGEMENT_OPERATOR.includes(msg.operator_id)) {
+      if (msg.sub_type === 'invite' && botConfig.functionManagementOperator.includes(msg.operator_id)) {
         banList = banList.filter(userId => userId !== msg.user_id);
         EventDataManager.setStorage('management', 'ban_list', banList).then();
         return;
@@ -51,7 +51,7 @@ function handleGroupIncreaseNotice(bot: QQBot, msg: GroupIncreaseNoticeWSMSG) {
 }
 
 function handleGroupRequest(bot: QQBot, msg: GroupRequestWSMSG) {
-  if (!Constants.FUNCTION_MANAGEMENT_GROUP.includes(msg.group_id)) return;
+  if (!botConfig.functionManagementGroup.includes(msg.group_id)) return;
   if (msg.sub_type !== 'add') return;
   EventDataManager.getStorage('management', 'ban_list').then((banList: number[]) => {
     if (!banList) return;

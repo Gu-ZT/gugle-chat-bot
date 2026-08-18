@@ -1,8 +1,7 @@
 import process from 'node:process';
 import { Logger } from 'winston';
 import { RawData, WebSocket } from 'ws';
-import { BotConfig } from '@/config';
-import Constants from '@/constants';
+import { botConfig, BotConfig } from '@/config';
 import fs from 'node:fs';
 import dayjs from 'dayjs';
 import { LoggerFactory } from '@/logger';
@@ -98,14 +97,14 @@ export class QQBot {
     this.config = config;
     this.eventManager = new EventManager();
     this.commandManager = new CommandManager();
-    this.ws = new WebSocket(`${Constants.WS_URL}/${Constants.TOKEN_PARAMS}${config.wsToken}`);
+    this.ws = new WebSocket(`${config.wsUrl}/${config.tokenParams}${config.wsToken}`);
     this.axiosInstance = axios.create({
       timeout: 15000,
-      baseURL: Constants.HTTP_URL,
+      baseURL: config.httpUrl,
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${config.httpToken}`,
-        'User-Agent': Constants.USER_AGENT
+        'User-Agent': config.userAgent
       }
     });
     this.ws.on('error', (e: Error) => {
@@ -241,7 +240,7 @@ export class QQBot {
   }
 
   private onGroupMsg(bot: QQBot, msg: GroupMessageWSMSG): void {
-    if (!Constants.FUNCTION_COMMAND_GROUP.includes(msg.group_id)) return;
+    if (!bot.config.functionCommandGroup.includes(msg.group_id)) return;
     const command = msg.raw_message;
     if (!command.startsWith('/')) return;
     bot.commandManager.execute(new GroupMsgCommandSource(bot, msg), command);
@@ -413,15 +412,11 @@ export class QQBot {
   }
 }
 
-export const bot = new QQBot({
-  wsToken: '',
-  httpToken: '',
-  logLevel: Constants.LOG_LEVEL
-});
+export const bot = new QQBot(botConfig);
 
 require('@/custom');
 
 bot.start().then(bot => {
   const github = new Github(bot);
-  github.start(8848);
+  github.start(botConfig.githubPort);
 });

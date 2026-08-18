@@ -14,7 +14,7 @@ import { Arguments, CommandManager, CommandSource } from 'gugle-command';
 import { MinecraftAPI } from '@/features/minecraft';
 import { ModrinthAPI } from '@/features/modrinth';
 import { EventDataManager } from '@/event';
-import Constants from '@/constants';
+import { botConfig } from '@/config';
 import { Bili } from '@/features/bili';
 import { Management } from '@/features/management';
 
@@ -206,7 +206,7 @@ ${wiki.url}`);
           return;
         }
         if (needWrite) EventDataManager.setStorage('mcupdate', 'latest', version.latest).then();
-        for (const listener of Constants.FUNCTION_MINECRAFT_GROUP) {
+        for (const listener of botConfig.functionMinecraftGroup) {
           bot.sendGroupMsg(listener, msg);
         }
       });
