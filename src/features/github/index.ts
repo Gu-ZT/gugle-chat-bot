@@ -172,6 +172,13 @@ export class Github {
     });
   }
 
+  private static isAllowedRepository(repository: string): boolean {
+    return botConfig.githubAllowedRepositories.some(pattern => {
+      if (pattern.endsWith('/*')) return repository.startsWith(`${pattern.slice(0, -2)}/`);
+      return repository === pattern;
+    });
+  }
+
   public static processMessage(bot: QQBot, msg: GroupMessageWSMSG, sentMessage: Message[]): Promise<void> {
     if (!botConfig.functionGithubGroup.includes(msg.group_id)) return Promise.resolve();
 
@@ -182,12 +189,23 @@ export class Github {
     });
 
     const strMsg = receivedMessage.map(msg => msg.data.text).join(' ');
-    const numStr = strMsg.match(/#(\d+)/g)?.shift();
-    if (!numStr) return Promise.resolve();
+    const issueReference = strMsg.match(/(?:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+))?#(\d+)/);
+    if (!issueReference?.[2]) return Promise.resolve();
 
-    const number = parseInt(numStr.substring(1));
-    const issueApiPath = `/repos/Anvil-Dev/AnvilCraft/issues/${number}`;
-    const pullApiPath = `/repos/Anvil-Dev/AnvilCraft/pulls/${number}`;
+    const repository = issueReference[1] || 'Anvil-Dev/AnvilCraft';
+    if (!this.isAllowedRepository(repository)) {
+      sentMessage.push({
+        type: 'text',
+        data: {
+          text: `仓库 ${repository} 不在允许访问的仓库列表中`
+        }
+      });
+      return Promise.resolve();
+    }
+
+    const number = Number.parseInt(issueReference[2], 10);
+    const issueApiPath = `/repos/${repository}/issues/${number}`;
+    const pullApiPath = `/repos/${repository}/pulls/${number}`;
 
     return new Promise<void>((resolve, reject) => {
       // 使用代理轮询获取 issue 数据

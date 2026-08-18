@@ -9,6 +9,7 @@ export default class Constants {
   public static readonly WS_TOKEN = '';
   public static readonly HTTP_TOKEN = '';
   public static readonly GITHUB_PORT = 8848;
+  public static readonly GITHUB_ALLOWED_REPOSITORIES = ['Anvil-Dev/*', 'Gu-ZT/*'];
   public static readonly FUNCTION_COMMAND_GROUP = [703453948];
   public static readonly FUNCTION_GITHUB_GROUP = [703453948];
   public static readonly FUNCTION_MANAGEMENT_GROUP = [703453948];

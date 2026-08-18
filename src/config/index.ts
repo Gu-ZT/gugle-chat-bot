@@ -14,6 +14,7 @@ export interface BotConfig {
   wsToken: string;
   httpToken: string;
   githubPort: number;
+  githubAllowedRepositories: string[];
   functionCommandGroup: number[];
   functionGithubGroup: number[];
   functionManagementGroup: number[];
@@ -38,6 +39,7 @@ const defaultBotConfig: BotConfig = {
   wsToken: Constants.WS_TOKEN,
   httpToken: Constants.HTTP_TOKEN,
   githubPort: Constants.GITHUB_PORT,
+  githubAllowedRepositories: Constants.GITHUB_ALLOWED_REPOSITORIES,
   functionCommandGroup: Constants.FUNCTION_COMMAND_GROUP,
   functionGithubGroup: Constants.FUNCTION_GITHUB_GROUP,
   functionManagementGroup: Constants.FUNCTION_MANAGEMENT_GROUP,
@@ -66,6 +68,14 @@ function isPort(value: unknown): value is number {
 
 function isNumberArray(value: unknown): value is number[] {
   return Array.isArray(value) && value.every(item => typeof item === 'number' && Number.isSafeInteger(item));
+}
+
+function isRepositoryPattern(value: unknown): value is string {
+  return isString(value) && /^[A-Za-z0-9_.-]+\/(?:[A-Za-z0-9_.-]+|\*)$/.test(value);
+}
+
+function isRepositoryPatternArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(isRepositoryPattern);
 }
 
 interface LoadedConfigFile {
@@ -146,6 +156,11 @@ function normalizeConfig(config: ConfigFile): NormalizedConfig {
       wsToken: valueOrDefault(config.wsToken, isString, defaultBotConfig.wsToken),
       httpToken: valueOrDefault(config.httpToken, isString, defaultBotConfig.httpToken),
       githubPort: valueOrDefault(config.githubPort, isPort, defaultBotConfig.githubPort),
+      githubAllowedRepositories: valueOrDefault(
+        config.githubAllowedRepositories,
+        isRepositoryPatternArray,
+        defaultBotConfig.githubAllowedRepositories
+      ),
       functionCommandGroup: valueOrDefault(config.functionCommandGroup, isNumberArray, defaultBotConfig.functionCommandGroup),
       functionGithubGroup: valueOrDefault(config.functionGithubGroup, isNumberArray, defaultBotConfig.functionGithubGroup),
       functionManagementGroup: valueOrDefault(
