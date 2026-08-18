@@ -68,8 +68,13 @@ function isNumberArray(value: unknown): value is number[] {
   return Array.isArray(value) && value.every(item => typeof item === 'number' && Number.isSafeInteger(item));
 }
 
+function createDefaultConfigFile(configPath: string): void {
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, `${JSON.stringify(defaultBotConfig, null, 2)}\n`, 'utf8');
+}
+
 function readConfigFile(configPath: string): ConfigFile {
-  if (!fs.existsSync(configPath)) return {};
+  if (!fs.existsSync(configPath)) createDefaultConfigFile(configPath);
 
   try {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as unknown;
