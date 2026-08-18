@@ -10,6 +10,7 @@ interface PendingBinding {
 
 interface GitHubBindings {
   bindings: Record<string, string[]>;
+  githubToQq: Record<string, string>;
   pending: Record<string, PendingBinding>;
 }
 
@@ -28,6 +29,10 @@ export class GitHubBindingManager {
     const bindings = GitHubBindingManager.load();
     const qqUserIdText = String(qqUserId);
 
+    const boundQqUserId = bindings.githubToQq[normalizedUsername.toLowerCase()];
+    if (boundQqUserId && boundQqUserId !== qqUserIdText) {
+      throw new Error(`GitHub 用户 ${normalizedUsername} 已被其他 QQ 用户绑定`);
+    }
     if (GitHubBindingManager.hasBinding(qqUserIdText, normalizedUsername)) {
       return { state: 'bound' };
     }
@@ -47,10 +52,16 @@ export class GitHubBindingManager {
     }
 
     const boundUsernames = bindings.bindings[qqUserIdText] || [];
-    if (!boundUsernames.some(boundUsername => boundUsername.toLowerCase() === profile.login.toLowerCase())) {
+    const normalizedProfileUsername = profile.login.toLowerCase();
+    const profileBoundQqUserId = bindings.githubToQq[normalizedProfileUsername];
+    if (profileBoundQqUserId && profileBoundQqUserId !== qqUserIdText) {
+      throw new Error(`GitHub 用户 ${profile.login} 已被其他 QQ 用户绑定`);
+    }
+    if (!boundUsernames.some(boundUsername => boundUsername.toLowerCase() === normalizedProfileUsername)) {
       boundUsernames.push(profile.login);
       bindings.bindings[qqUserIdText] = boundUsernames;
     }
+    bindings.githubToQq[normalizedProfileUsername] = qqUserIdText;
     delete bindings.pending[pendingKey];
     GitHubBindingManager.save();
     return { state: 'bound' };
@@ -58,9 +69,7 @@ export class GitHubBindingManager {
 
   public static isBoundUsername(username: string): boolean {
     const normalizedUsername = username.toLowerCase();
-    return Object.values(GitHubBindingManager.load().bindings).some(usernames =>
-      usernames.some(boundUsername => boundUsername.toLowerCase() === normalizedUsername)
-    );
+    return Boolean(GitHubBindingManager.load().githubToQq[normalizedUsername]);
   }
 
   private static normalizeUsername(username: string): string {
@@ -104,17 +113,37 @@ export class GitHubBindingManager {
 
     fs.mkdirSync(path.dirname(GitHubBindingManager.FILE), { recursive: true });
     if (!fs.existsSync(GitHubBindingManager.FILE)) {
-      GitHubBindingManager.bindings = { bindings: {}, pending: {} };
+      GitHubBindingManager.bindings = { bindings: {}, githubToQq: {}, pending: {} };
       GitHubBindingManager.save();
       return GitHubBindingManager.bindings;
     }
 
     try {
       const parsed = JSON.parse(fs.readFileSync(GitHubBindingManager.FILE, 'utf8')) as Partial<GitHubBindings>;
+      const bindings: Record<string, string[]> =
+        parsed.bindings && typeof parsed.bindings === 'object' ? parsed.bindings : {};
+      const githubToQq: Record<string, string> =
+        parsed.githubToQq && typeof parsed.githubToQq === 'object' ? parsed.githubToQq : {};
+      let needsSave = !parsed.githubToQq;
+
+      for (const [qqUserId, usernames] of Object.entries(bindings)) {
+        if (!Array.isArray(usernames)) continue;
+        for (const username of usernames) {
+          if (typeof username !== 'string') continue;
+          const normalizedUsername = username.toLowerCase();
+          if (!githubToQq[normalizedUsername]) {
+            githubToQq[normalizedUsername] = qqUserId;
+            needsSave = true;
+          }
+        }
+      }
+
       GitHubBindingManager.bindings = {
-        bindings: parsed.bindings && typeof parsed.bindings === 'object' ? parsed.bindings : {},
+        bindings,
+        githubToQq,
         pending: parsed.pending && typeof parsed.pending === 'object' ? parsed.pending : {}
       };
+      if (needsSave) GitHubBindingManager.save();
     } catch (error) {
       throw new Error(`无法加载 GitHub 绑定数据：${error instanceof Error ? error.message : String(error)}`);
     }
