@@ -307,7 +307,9 @@ export class QQBot {
           user_id: userID,
           message: message
         })
-        .then();
+        .catch(error => {
+          bot.logger?.error(`Failed to send private message to ${userID}: ${error.message}`);
+        });
     });
   }
 
@@ -319,7 +321,9 @@ export class QQBot {
           group_id: groupId,
           message: message
         })
-        .then();
+        .catch(error => {
+          bot.logger?.error(`Failed to send group message to ${groupId}: ${error.message}`);
+        });
     });
   }
 
