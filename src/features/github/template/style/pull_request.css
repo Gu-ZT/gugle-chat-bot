@@ -30,9 +30,9 @@ body {
 .repository_header {
     display: flex;
     align-items: center;
-    gap: .45rem;
+    gap: .5rem;
     min-height: 52px;
-    padding: .7rem 1.25rem;
+    padding: .65rem 1.2rem;
     color: #f0f6fc;
     background: #161b22;
     font-size: 1rem;
@@ -40,9 +40,22 @@ body {
     overflow: hidden;
 }
 
+.repository_mark_wrapper {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    margin-right: .2rem;
+    flex: 0 0 auto;
+    color: #161b22;
+    background: #f0f6fc;
+    border-radius: 50%;
+}
+
 .repository_mark {
-    width: 22px;
-    height: 22px;
+    width: 18px;
+    height: 18px;
     flex: 0 0 auto;
     fill: currentColor;
 }
@@ -67,10 +80,20 @@ body {
 }
 
 .repository_chevron {
-    margin-left: .15rem;
-    color: #8b949e;
-    font-size: 1.1rem;
-    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    margin-left: .05rem;
+    color: #9198a1;
+    flex: 0 0 auto;
+
+    svg {
+        width: 16px;
+        height: 16px;
+        fill: currentColor;
+    }
 }
 
 .container {
