@@ -68,74 +68,128 @@ function isNumberArray(value: unknown): value is number[] {
   return Array.isArray(value) && value.every(item => typeof item === 'number' && Number.isSafeInteger(item));
 }
 
-function createDefaultConfigFile(configPath: string): void {
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, `${JSON.stringify(defaultBotConfig, null, 2)}\n`, 'utf8');
+interface LoadedConfigFile {
+  config: ConfigFile;
+  contents: string;
 }
 
-function readConfigFile(configPath: string): ConfigFile {
+interface NormalizedConfig {
+  config: BotConfig;
+  hasInvalidField: boolean;
+  needsWrite: boolean;
+}
+
+function writeConfigFile(configPath: string, config: BotConfig): void {
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+}
+
+function createDefaultConfigFile(configPath: string): void {
+  writeConfigFile(configPath, defaultBotConfig);
+}
+
+function createBackupConfigFile(configPath: string, contents: string): void {
+  const { dir, ext, name } = path.parse(configPath);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  let backupPath = path.join(dir, `${name}.bak.${timestamp}${ext}`);
+  let index = 1;
+
+  while (fs.existsSync(backupPath)) {
+    backupPath = path.join(dir, `${name}.bak.${timestamp}.${index}${ext}`);
+    index++;
+  }
+
+  fs.writeFileSync(backupPath, contents, 'utf8');
+}
+
+function readConfigFile(configPath: string): LoadedConfigFile {
   if (!fs.existsSync(configPath)) createDefaultConfigFile(configPath);
 
+  const contents = fs.readFileSync(configPath, 'utf8');
   try {
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as unknown;
+    const config = JSON.parse(contents) as unknown;
     if (!config || typeof config !== 'object' || Array.isArray(config)) {
       throw new Error('root must be an object');
     }
-    return config as ConfigFile;
+    return { config: config as ConfigFile, contents };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Failed to load bot configuration from ${configPath}: ${message}`);
   }
 }
 
-function valueOrDefault<T>(value: unknown, validator: (value: unknown) => value is T, fallback: T): T {
-  return validator(value) ? value : fallback;
+function normalizeConfig(config: ConfigFile): NormalizedConfig {
+  let hasInvalidField = false;
+  let needsWrite = false;
+
+  function valueOrDefault<T>(value: unknown, validator: (value: unknown) => value is T, fallback: T): T {
+    if (value === undefined) {
+      needsWrite = true;
+      return fallback;
+    }
+    if (!validator(value)) {
+      hasInvalidField = true;
+      needsWrite = true;
+      return fallback;
+    }
+    return value;
+  }
+
+  return {
+    config: {
+      userAgent: valueOrDefault(config.userAgent, isString, defaultBotConfig.userAgent),
+      logLevel: valueOrDefault(config.logLevel, isLogLevel, defaultBotConfig.logLevel),
+      chromePath: valueOrDefault(config.chromePath, isString, defaultBotConfig.chromePath),
+      httpUrl: valueOrDefault(config.httpUrl, isString, defaultBotConfig.httpUrl),
+      wsUrl: valueOrDefault(config.wsUrl, isString, defaultBotConfig.wsUrl),
+      tokenParams: valueOrDefault(config.tokenParams, isString, defaultBotConfig.tokenParams),
+      wsToken: valueOrDefault(config.wsToken, isString, defaultBotConfig.wsToken),
+      httpToken: valueOrDefault(config.httpToken, isString, defaultBotConfig.httpToken),
+      githubPort: valueOrDefault(config.githubPort, isPort, defaultBotConfig.githubPort),
+      functionCommandGroup: valueOrDefault(config.functionCommandGroup, isNumberArray, defaultBotConfig.functionCommandGroup),
+      functionGithubGroup: valueOrDefault(config.functionGithubGroup, isNumberArray, defaultBotConfig.functionGithubGroup),
+      functionManagementGroup: valueOrDefault(
+        config.functionManagementGroup,
+        isNumberArray,
+        defaultBotConfig.functionManagementGroup
+      ),
+      functionManagementOperator: valueOrDefault(
+        config.functionManagementOperator,
+        isNumberArray,
+        defaultBotConfig.functionManagementOperator
+      ),
+      functionParenthesesGroup: valueOrDefault(
+        config.functionParenthesesGroup,
+        isNumberArray,
+        defaultBotConfig.functionParenthesesGroup
+      ),
+      functionPokeGroup: valueOrDefault(config.functionPokeGroup, isNumberArray, defaultBotConfig.functionPokeGroup),
+      functionMinecraftGroup: valueOrDefault(
+        config.functionMinecraftGroup,
+        isNumberArray,
+        defaultBotConfig.functionMinecraftGroup
+      ),
+      functionModrinthGroup: valueOrDefault(
+        config.functionModrinthGroup,
+        isNumberArray,
+        defaultBotConfig.functionModrinthGroup
+      ),
+      functionBiliFollow: valueOrDefault(config.functionBiliFollow, isNumberArray, defaultBotConfig.functionBiliFollow),
+      functionBiliGroup: valueOrDefault(config.functionBiliGroup, isNumberArray, defaultBotConfig.functionBiliGroup)
+    },
+    hasInvalidField,
+    needsWrite
+  };
 }
 
 export function loadBotConfig(configPath: string = path.resolve(process.cwd(), 'configs', 'bot-config.json')): BotConfig {
-  const config = readConfigFile(configPath);
+  const loadedConfig = readConfigFile(configPath);
+  const normalizedConfig = normalizeConfig(loadedConfig.config);
 
-  return {
-    userAgent: valueOrDefault(config.userAgent, isString, defaultBotConfig.userAgent),
-    logLevel: valueOrDefault(config.logLevel, isLogLevel, defaultBotConfig.logLevel),
-    chromePath: valueOrDefault(config.chromePath, isString, defaultBotConfig.chromePath),
-    httpUrl: valueOrDefault(config.httpUrl, isString, defaultBotConfig.httpUrl),
-    wsUrl: valueOrDefault(config.wsUrl, isString, defaultBotConfig.wsUrl),
-    tokenParams: valueOrDefault(config.tokenParams, isString, defaultBotConfig.tokenParams),
-    wsToken: valueOrDefault(config.wsToken, isString, defaultBotConfig.wsToken),
-    httpToken: valueOrDefault(config.httpToken, isString, defaultBotConfig.httpToken),
-    githubPort: valueOrDefault(config.githubPort, isPort, defaultBotConfig.githubPort),
-    functionCommandGroup: valueOrDefault(config.functionCommandGroup, isNumberArray, defaultBotConfig.functionCommandGroup),
-    functionGithubGroup: valueOrDefault(config.functionGithubGroup, isNumberArray, defaultBotConfig.functionGithubGroup),
-    functionManagementGroup: valueOrDefault(
-      config.functionManagementGroup,
-      isNumberArray,
-      defaultBotConfig.functionManagementGroup
-    ),
-    functionManagementOperator: valueOrDefault(
-      config.functionManagementOperator,
-      isNumberArray,
-      defaultBotConfig.functionManagementOperator
-    ),
-    functionParenthesesGroup: valueOrDefault(
-      config.functionParenthesesGroup,
-      isNumberArray,
-      defaultBotConfig.functionParenthesesGroup
-    ),
-    functionPokeGroup: valueOrDefault(config.functionPokeGroup, isNumberArray, defaultBotConfig.functionPokeGroup),
-    functionMinecraftGroup: valueOrDefault(
-      config.functionMinecraftGroup,
-      isNumberArray,
-      defaultBotConfig.functionMinecraftGroup
-    ),
-    functionModrinthGroup: valueOrDefault(
-      config.functionModrinthGroup,
-      isNumberArray,
-      defaultBotConfig.functionModrinthGroup
-    ),
-    functionBiliFollow: valueOrDefault(config.functionBiliFollow, isNumberArray, defaultBotConfig.functionBiliFollow),
-    functionBiliGroup: valueOrDefault(config.functionBiliGroup, isNumberArray, defaultBotConfig.functionBiliGroup)
-  };
+  if (normalizedConfig.hasInvalidField) createBackupConfigFile(configPath, loadedConfig.contents);
+  if (normalizedConfig.needsWrite) writeConfigFile(configPath, normalizedConfig.config);
+
+  return normalizedConfig.config;
 }
 
 export const botConfig = loadBotConfig();
