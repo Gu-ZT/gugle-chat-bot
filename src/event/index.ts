@@ -1,7 +1,9 @@
 import * as fs from 'node:fs';
 
 export class EventDataManager {
-  private static readonly FILE: string = './config/event-data.json';
+  private static readonly FILE: string = './configs/event-data.json';
+  private static readonly LEGACY_FILE: string = './config/event-data.json';
+  private static readonly LEGACY_DIRECTORY: string = './config';
   private static listeners: {
     [key: string]: { roomId: string; channelId: string }[];
   } = {};
@@ -57,9 +59,20 @@ export class EventDataManager {
     await EventDataManager.save();
   }
 
+  private static migrateLegacyFile(): void {
+    if (!fs.existsSync(EventDataManager.LEGACY_DIRECTORY)) return;
+
+    fs.mkdirSync('./configs', { recursive: true });
+    if (fs.existsSync(EventDataManager.LEGACY_FILE) && !fs.existsSync(EventDataManager.FILE)) {
+      fs.renameSync(EventDataManager.LEGACY_FILE, EventDataManager.FILE);
+    }
+    fs.rmSync(EventDataManager.LEGACY_DIRECTORY, { recursive: true, force: true });
+  }
+
   public static async checkAndCreateFile(): Promise<void> {
+    EventDataManager.migrateLegacyFile();
     if (!fs.existsSync(EventDataManager.FILE)) {
-      fs.mkdirSync('./config', { recursive: true });
+      fs.mkdirSync('./configs', { recursive: true });
       fs.writeFile(
         EventDataManager.FILE,
         JSON.stringify(
