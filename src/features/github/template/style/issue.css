@@ -40,24 +40,12 @@ body {
     overflow: hidden;
 }
 
-.repository_mark_wrapper {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+.repository_mark {
     width: 30px;
     height: 30px;
     margin-right: .2rem;
     flex: 0 0 auto;
-    color: #161b22;
-    background: #f0f6fc;
-    border-radius: 50%;
-}
-
-.repository_mark {
-    width: 18px;
-    height: 18px;
-    flex: 0 0 auto;
-    fill: currentColor;
+    fill: #f0f6fc;
 }
 
 .repository_owner,
