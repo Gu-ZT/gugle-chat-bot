@@ -1,7 +1,7 @@
 import axios, { AxiosResponse } from 'axios';
-import { EventDataManager } from '@/event';
 import { Message } from '@/type';
 import { getFeatureGroups } from '@/config/features';
+import { checkStableVersion } from '@/features/version-tracker';
 import { QQBot } from '@/index';
 
 export declare type ModrinthVersion = {
@@ -40,31 +40,22 @@ export class ModrinthAPI {
 
   public static checkVersion(bot: QQBot, slug: string, name: string) {
     ModrinthAPI.getModVersion(slug).then(version => {
-      EventDataManager.getStorage(slug, 'latest').then((latest: string) => {
-        // If current request succeeds but previous failed, or version changed
-        if (version.success && (!latest || latest !== version.latest)) {
-          const msg: Message[] = [
-            {
-              type: 'text',
-              data: {
-                text: `${name}更新了！
+      if (!version.success) return;
+      // 稳定窗口确认后才通知，避免 CDN 缓存抖动导致重复发送
+      checkStableVersion(`modrinth:${slug}`, version.latest).then(shouldNotify => {
+        if (!shouldNotify) return;
+        const msg: Message[] = [
+          {
+            type: 'text',
+            data: {
+              text: `${name}更新了！
 · 最新版本：${version.latest}
 · 下载直链：https://api.modrinth.com/maven/maven/modrinth/${slug}/${version.latest}/${slug}-${version.latest}.jar`
-              }
             }
-          ];
-          EventDataManager.setStorage(slug, 'latest', version.latest).then();
-          for (const listener of getFeatureGroups('modrinth')) {
-            bot.sendGroupMsg(listener, msg);
           }
-        }
-        // If current request fails but we had a previous success, reset the storage
-        else if (!version.success && latest) {
-          EventDataManager.setStorage(slug, 'latest', '').then();
-        }
-        // If first time successful, just store it
-        else if (version.success && !latest) {
-          EventDataManager.setStorage(slug, 'latest', version.latest).then();
+        ];
+        for (const listener of getFeatureGroups('modrinth')) {
+          bot.sendGroupMsg(listener, msg);
         }
       });
     });

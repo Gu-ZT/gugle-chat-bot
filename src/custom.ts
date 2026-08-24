@@ -14,8 +14,8 @@ import { Poke } from '@/features/poke';
 import { Arguments, CommandManager, CommandSource } from 'gugle-command';
 import { MinecraftAPI } from '@/features/minecraft';
 import { ModrinthAPI } from '@/features/modrinth';
-import { EventDataManager } from '@/event';
 import { getFeatureGroups } from '@/config/features';
+import { checkStableVersion } from '@/features/version-tracker';
 import { Bili } from '@/features/bili';
 import { Management } from '@/features/management';
 import { PeakValleyTimer } from '@/features/peak-valley-timer';
@@ -197,13 +197,11 @@ ${wiki.url}`);
   public cronCheckMinecraftVersion() {
     MinecraftAPI.getVersion().then(version => {
       if (!version.success) return;
-      EventDataManager.getStorage('mcupdate', 'latest').then((latest: { release: string; snapshot: string }) => {
-        let needWrite = true;
-        if (!latest) {
-          EventDataManager.setStorage('mcupdate', 'latest', version.latest).then();
-          latest = version.latest;
-          needWrite = false;
-        }
+      // release 与 snapshot 分别走稳定窗口确认，避免 CDN 缓存抖动重复发送
+      Promise.all([
+        checkStableVersion('mcupdate:release', version.latest.release),
+        checkStableVersion('mcupdate:snapshot', version.latest.snapshot)
+      ]).then(([releaseStable, snapshotStable]) => {
         const msg: Message[] = [
           {
             type: 'text',
@@ -212,7 +210,7 @@ ${wiki.url}`);
             }
           }
         ];
-        if (latest.release != version.latest.release) {
+        if (releaseStable) {
           msg.push({
             type: 'text',
             data: {
@@ -225,7 +223,8 @@ ${wiki.url}`);
               text: `https://www.minecraft.net/en-us/article/minecraft-java-edition-${version.latest.release.replace('.', '-')}`
             }
           });
-        } else if (latest.snapshot != version.latest.snapshot) {
+        }
+        if (snapshotStable) {
           msg.push({
             type: 'text',
             data: {
@@ -245,10 +244,9 @@ ${wiki.url}`);
               text: `https://www.minecraft.net/en-us/article/minecraft-${snapshot}`
             }
           });
-        } else {
-          return;
         }
-        if (needWrite) EventDataManager.setStorage('mcupdate', 'latest', version.latest).then();
+        // 只有 release 或 snapshot 任一被稳定确认才发送
+        if (!releaseStable && !snapshotStable) return;
         for (const listener of getFeatureGroups('minecraft')) {
           bot.sendGroupMsg(listener, msg);
         }
