@@ -31,6 +31,7 @@ class CustomBot {
 · /wiki <query>：搜索 Minecraft 维基
 · /github bind <Username>：绑定 GitHub 用户名
 · /github subscribe <owner/repo>：订阅仓库消息推送
+· /pardon <QQ号>：把用户移出黑名单（管理员）
 · /pvtime：查询当前是梁文峰时间还是梁文谷时间`);
   }
 
@@ -116,6 +117,29 @@ ${wiki.url}`);
       `${current}
 · 当前订阅该仓库的群：${subscribers.length > 0 ? subscribers.join('、') : '（无）'}`
     );
+  }
+
+  public static pardonCommand(source: CommandSource, userId: string) {
+    if (!(source instanceof GroupMsgCommandSource)) {
+      source.fail('只支持在群聊中使用');
+      return;
+    }
+    const qq = Number(userId);
+    if (!Number.isSafeInteger(qq) || qq <= 0) {
+      source.fail(`QQ 号格式错误：${userId}`);
+      return;
+    }
+    Management.pardon(source.msg.group_id, source.msg.sender.user_id, qq)
+      .then(removed => {
+        if (removed) {
+          source.success(`已从黑名单中移除用户 ${qq}`);
+        } else {
+          source.fail('用户不在黑名单中，或你没有赦免权限');
+        }
+      })
+      .catch(error => {
+        source.fail(error instanceof Error ? error.message : String(error));
+      });
   }
 
   @bot.subscribe('notice-event-notify', false)
@@ -211,6 +235,12 @@ ${wiki.url}`);
       )
     );
     command.register('gugle-command', githubNode);
+    command.register(
+      'gugle-command',
+      CommandManager.literal('pardon').then(
+        CommandManager.argument('userId', Arguments.STRING).execute(CustomBot.pardonCommand)
+      )
+    );
     command.register('gugle-command', CommandManager.literal('pvtime').execute(CustomBot.peakValleyTimeCommand));
   }
 
