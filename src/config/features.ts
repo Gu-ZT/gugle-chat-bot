@@ -59,6 +59,30 @@ export interface GithubFeatureConfig {
   groups: Record<string, number[]>;
 }
 
+/**
+ * 新人欢迎配置（v1）。
+ *
+ * configs/features/welcome.json：
+ * ```json
+ * {
+ *   "version": 1,
+ *   "welcomes": [
+ *     { "group": [123456, 234567], "msg": "欢迎 ${at} 加入群聊" }
+ *   ]
+ * }
+ * ```
+ */
+export interface WelcomeFeatureConfig {
+  version: number;
+  welcomes: WelcomeEntry[];
+}
+
+/** 单条欢迎配置：适用的群列表 + 欢迎语模板（${at} 替换为 @新成员） */
+export interface WelcomeEntry {
+  group: number[];
+  msg: string;
+}
+
 export interface LegacyFunctionValues {
   featureId: string;
   groups?: number[];
@@ -300,6 +324,43 @@ export function unsubscribeGithubRepository(repository: string, groupId: number)
 /** 仓库名格式校验（owner/name，均允许字母数字 . _ -） */
 export function isValidRepositoryName(repository: string): boolean {
   return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository);
+}
+
+// ---------------------------------------------------------------------------
+// 新人欢迎配置（v1：welcomes 数组）
+// ---------------------------------------------------------------------------
+
+function welcomeFactory(): WelcomeFeatureConfig {
+  return { version: 1, welcomes: [] };
+}
+
+function normalizeWelcomeConfig(raw: unknown): WelcomeFeatureConfig | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const welcomes = Array.isArray(record.welcomes) ? record.welcomes : [];
+  const normalized: WelcomeEntry[] = [];
+  for (const item of welcomes) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const entry = item as Record<string, unknown>;
+    if (!Array.isArray(entry.group) || typeof entry.msg !== 'string') continue;
+    const group = entry.group.filter(g => typeof g === 'number' && Number.isSafeInteger(g));
+    if (group.length === 0 && !entry.msg) continue;
+    normalized.push({ group, msg: entry.msg });
+    // 若某个条目 group 为空数组（无法匹配任何群），写回时保留原样（normalize 后再落盘会剔除非 number）
+  }
+  return { version: 1, welcomes: normalized };
+}
+
+const welcomeStore = new ConfigStore<WelcomeFeatureConfig>({
+  path: 'configs/features/welcome.json',
+  version: 1,
+  factory: welcomeFactory,
+  normalize: normalizeWelcomeConfig
+});
+
+/** 读取新人欢迎生效配置（v1：welcomes 数组） */
+export function getWelcomeConfig(): WelcomeFeatureConfig {
+  return welcomeStore.get();
 }
 
 // ---------------------------------------------------------------------------

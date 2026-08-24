@@ -18,6 +18,7 @@ import { getFeatureGroups, isValidRepositoryName, subscribeGithubRepository } fr
 import { checkReleasedVersion } from '@/features/version-tracker';
 import { Bili } from '@/features/bili';
 import { Management } from '@/features/management';
+import { Welcome } from '@/features/welcome';
 import { PeakValleyTimer } from '@/features/peak-valley-timer';
 
 class CustomBot {
@@ -172,6 +173,7 @@ ${wiki.url}`);
   @bot.subscribe('notice-event-group-increase', false)
   public listenGroupIncreaseNotice(bot: QQBot, msg: GroupIncreaseNoticeWSMSG): void {
     Management.handleGroupIncreaseNotice(bot, msg);
+    Welcome.handleGroupIncreaseNotice(bot, msg);
   }
 
   @bot.subscribe('request-event-group', false)
