@@ -67,20 +67,24 @@ export interface GithubFeatureConfig {
  * {
  *   "version": 1,
  *   "welcomes": [
- *     { "group": [123456, 234567], "msg": "欢迎 ${at} 加入群聊" }
+ *     {
+ *       "group": [123456, 234567],
+ *       "msg": ["欢迎 ${at} 加入群聊", "请查看群公告"]
+ *     }
  *   ]
  * }
  * ```
+ * `msg` 可以是字符串或字符串数组（数组每项一行，发送时按换行拼接）。
  */
 export interface WelcomeFeatureConfig {
   version: number;
   welcomes: WelcomeEntry[];
 }
 
-/** 单条欢迎配置：适用的群列表 + 欢迎语模板（${at} 替换为 @新成员） */
+/** 单条欢迎配置：适用的群列表 + 欢迎语模板（${at} 替换为 @新成员；支持多行数组） */
 export interface WelcomeEntry {
   group: number[];
-  msg: string;
+  msg: string | string[];
 }
 
 export interface LegacyFunctionValues {
@@ -342,13 +346,23 @@ function normalizeWelcomeConfig(raw: unknown): WelcomeFeatureConfig | null {
   for (const item of welcomes) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
     const entry = item as Record<string, unknown>;
-    if (!Array.isArray(entry.group) || typeof entry.msg !== 'string') continue;
+    if (!Array.isArray(entry.group)) continue;
+    const msg = normalizeWelcomeMsg(entry.msg);
+    if (msg === null) continue;
     const group = entry.group.filter(g => typeof g === 'number' && Number.isSafeInteger(g));
-    if (group.length === 0 && !entry.msg) continue;
-    normalized.push({ group, msg: entry.msg });
-    // 若某个条目 group 为空数组（无法匹配任何群），写回时保留原样（normalize 后再落盘会剔除非 number）
+    normalized.push({ group, msg });
   }
   return { version: 1, welcomes: normalized };
+}
+
+/** 规范化 msg 字段：字符串或字符串数组（数组元素须全为字符串），否则返回 null */
+function normalizeWelcomeMsg(raw: unknown): string | string[] | null {
+  if (typeof raw === 'string') return raw;
+  if (Array.isArray(raw)) {
+    if (raw.every(item => typeof item === 'string')) return raw;
+    return null;
+  }
+  return null;
 }
 
 const welcomeStore = new ConfigStore<WelcomeFeatureConfig>({

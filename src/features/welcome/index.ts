@@ -10,12 +10,14 @@ import { getWelcomeConfig } from '@/config/features';
  * {
  *   "version": 1,
  *   "welcomes": [
- *     { "group": [123456, 234567], "msg": "欢迎 ${at} 加入群聊" }
+ *     { "group": [123456, 234567], "msg": "欢迎 ${at} 加入群聊" },
+ *     { "group": [888888], "msg": ["${at} 欢迎你！", "请查看群公告", "有问题找管理员"] }
  *   ]
  * }
  * ```
  * - `group`：适用群号列表（可多个群共用同一条欢迎语）
- * - `msg`：欢迎语模板，`${at}` 会被替换为 @新成员 消息段
+ * - `msg`：欢迎语模板（字符串或字符串数组，数组每项一行，\n 拼接），
+ *   `${at}` 会被替换为 @新成员 消息段
  */
 export class Welcome {
   /**
@@ -33,9 +35,11 @@ export class Welcome {
 /**
  * 将欢迎模板渲染成消息段数组：`${at}` 拆分为 @成员 消息段，
  * 其余文本保持文本段（避免以字符串拼接 CQ 码）。
+ * `template` 可为字符串或字符串数组（数组按换行拼接为多行文本）。
  */
-export function buildWelcomeMessage(qq: number, template: string): import('@/type').Message[] {
-  const parts = template.split('${at}');
+export function buildWelcomeMessage(qq: number, template: string | string[]): import('@/type').Message[] {
+  const text = Array.isArray(template) ? template.join('\n') : template;
+  const parts = text.split('${at}');
   const messages: import('@/type').Message[] = [];
   parts.forEach((part, index) => {
     if (part) {
