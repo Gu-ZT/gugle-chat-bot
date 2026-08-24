@@ -1,7 +1,7 @@
 import axios, { AxiosResponse } from 'axios';
 import { EventDataManager } from '@/event';
 import { Message } from '@/type';
-import { botConfig } from '@/config';
+import { getFeatureGroups } from '@/config/features';
 import { QQBot } from '@/index';
 
 export declare type ModrinthVersion = {
@@ -54,7 +54,7 @@ export class ModrinthAPI {
             }
           ];
           EventDataManager.setStorage(slug, 'latest', version.latest).then();
-          for (const listener of botConfig.functionModrinthGroup) {
+          for (const listener of getFeatureGroups('modrinth')) {
             bot.sendGroupMsg(listener, msg);
           }
         }

@@ -15,16 +15,6 @@ export interface BotConfig {
   httpToken: string;
   githubPort: number;
   githubAllowedRepositories: string[];
-  functionCommandGroup: number[];
-  functionGithubGroup: number[];
-  functionManagementGroup: number[];
-  functionManagementOperator: number[];
-  functionParenthesesGroup: number[];
-  functionPokeGroup: number[];
-  functionMinecraftGroup: number[];
-  functionModrinthGroup: number[];
-  functionBiliFollow: number[];
-  functionBiliGroup: number[];
 }
 
 type ConfigFile = Partial<BotConfig>;
@@ -39,17 +29,7 @@ const defaultBotConfig: BotConfig = {
   wsToken: Constants.WS_TOKEN,
   httpToken: Constants.HTTP_TOKEN,
   githubPort: Constants.GITHUB_PORT,
-  githubAllowedRepositories: Constants.GITHUB_ALLOWED_REPOSITORIES,
-  functionCommandGroup: Constants.FUNCTION_COMMAND_GROUP,
-  functionGithubGroup: Constants.FUNCTION_GITHUB_GROUP,
-  functionManagementGroup: Constants.FUNCTION_MANAGEMENT_GROUP,
-  functionManagementOperator: Constants.FUNCTION_MANAGEMENT_OPERATOR,
-  functionParenthesesGroup: Constants.FUNCTION_PARENTHESES_GROUP,
-  functionPokeGroup: Constants.FUNCTION_POKE_GROUP,
-  functionMinecraftGroup: Constants.FUNCTION_MINECRAFT_GROUP,
-  functionModrinthGroup: Constants.FUNCTION_MODRINTH_GROUP,
-  functionBiliFollow: Constants.FUNCTION_BILI_FOLLOW,
-  functionBiliGroup: Constants.FUNCTION_BILI_GROUP
+  githubAllowedRepositories: Constants.GITHUB_ALLOWED_REPOSITORIES
 };
 
 const logLevels: readonly LogLevel[] = ['info', 'error', 'warn', 'debug'];
@@ -64,10 +44,6 @@ function isLogLevel(value: unknown): value is LogLevel {
 
 function isPort(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 65535;
-}
-
-function isNumberArray(value: unknown): value is number[] {
-  return Array.isArray(value) && value.every(item => typeof item === 'number' && Number.isSafeInteger(item));
 }
 
 function isRepositoryPattern(value: unknown): value is string {
@@ -160,37 +136,7 @@ function normalizeConfig(config: ConfigFile): NormalizedConfig {
         config.githubAllowedRepositories,
         isRepositoryPatternArray,
         defaultBotConfig.githubAllowedRepositories
-      ),
-      functionCommandGroup: valueOrDefault(config.functionCommandGroup, isNumberArray, defaultBotConfig.functionCommandGroup),
-      functionGithubGroup: valueOrDefault(config.functionGithubGroup, isNumberArray, defaultBotConfig.functionGithubGroup),
-      functionManagementGroup: valueOrDefault(
-        config.functionManagementGroup,
-        isNumberArray,
-        defaultBotConfig.functionManagementGroup
-      ),
-      functionManagementOperator: valueOrDefault(
-        config.functionManagementOperator,
-        isNumberArray,
-        defaultBotConfig.functionManagementOperator
-      ),
-      functionParenthesesGroup: valueOrDefault(
-        config.functionParenthesesGroup,
-        isNumberArray,
-        defaultBotConfig.functionParenthesesGroup
-      ),
-      functionPokeGroup: valueOrDefault(config.functionPokeGroup, isNumberArray, defaultBotConfig.functionPokeGroup),
-      functionMinecraftGroup: valueOrDefault(
-        config.functionMinecraftGroup,
-        isNumberArray,
-        defaultBotConfig.functionMinecraftGroup
-      ),
-      functionModrinthGroup: valueOrDefault(
-        config.functionModrinthGroup,
-        isNumberArray,
-        defaultBotConfig.functionModrinthGroup
-      ),
-      functionBiliFollow: valueOrDefault(config.functionBiliFollow, isNumberArray, defaultBotConfig.functionBiliFollow),
-      functionBiliGroup: valueOrDefault(config.functionBiliGroup, isNumberArray, defaultBotConfig.functionBiliGroup)
+      )
     },
     hasInvalidField,
     needsWrite

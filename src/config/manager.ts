@@ -1,6 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+export interface MigrationStep {
+  /** 源版本号（迁移前） */
+  from: number;
+  /** 目标版本号（迁移后） */
+  to: number;
+  /** 迁移函数：接收旧数据，返回新数据 */
+  migrate: (data: Record<string, unknown>) => Record<string, unknown>;
+}
+
 export interface ConfigFileOptions<T> {
   /** 配置文件路径（相对 process.cwd() 或绝对路径） */
   path: string;
@@ -10,6 +19,10 @@ export interface ConfigFileOptions<T> {
   factory?: () => T;
   /** 解析后的校验/规范化钩子：返回 false 表示内容非法（触发备份重建），返回规范化后的值 */
   normalize?: (raw: unknown) => T | null;
+  /** 期望的配置文件版本号（默认 1）。文件版本低于此值时按 migrations 逐级升级 */
+  version?: number;
+  /** 版本迁移步骤：按 from 升序执行，把旧版本数据升级到新版本 */
+  migrations?: MigrationStep[];
 }
 
 export interface ReadOrCreateResult<T> {
@@ -58,8 +71,9 @@ export function readOrCreate<T>(options: ConfigFileOptions<T>): ReadOrCreateResu
 
   const contents = fs.readFileSync(configPath, 'utf8');
   let raw: unknown;
+  let parsed: unknown;
   try {
-    raw = JSON.parse(contents);
+    parsed = JSON.parse(contents);
   } catch (_) {
     // JSON 损坏：备份原文件后重建默认
     backupPath = createBackupConfigFile(configPath, contents);
@@ -67,6 +81,33 @@ export function readOrCreate<T>(options: ConfigFileOptions<T>): ReadOrCreateResu
     writeConfigFile(configPath, rebuilt);
     return { data: rebuilt, wrote: true, backupPath };
   }
+  // 版本迁移：文件版本低于期望版本时逐级升级
+  const targetVersion = options.version ?? 1;
+  let migrated = parsed;
+  let migratedAny = false;
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const currentVersion =
+      typeof (parsed as Record<string, unknown>).version === 'number'
+        ? ((parsed as Record<string, unknown>).version as number)
+        : 1;
+    if (currentVersion < targetVersion && options.migrations) {
+      const ordered = [...options.migrations].sort((a, b) => a.from - b.from);
+      let working = parsed as Record<string, unknown>;
+      for (const step of ordered) {
+        if (step.from >= currentVersion && step.to <= targetVersion) {
+          working = step.migrate(working);
+          migratedAny = true;
+        }
+      }
+      if (migratedAny) {
+        working = { ...working, version: targetVersion };
+        writeConfigFile(configPath, working);
+        return { data: working as T, wrote: true };
+      }
+      migrated = working;
+    }
+  }
+  raw = migrated;
 
   if (options.normalize) {
     const normalized = options.normalize(raw);

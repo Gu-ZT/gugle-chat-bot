@@ -2,6 +2,7 @@ import process from 'node:process';
 import { Logger } from 'winston';
 import { RawData, WebSocket } from 'ws';
 import { botConfig, BotConfig } from '@/config';
+import { getFeatureGroups } from '@/config/features';
 import fs from 'node:fs';
 import dayjs from 'dayjs';
 import { LoggerFactory } from '@/logger';
@@ -240,7 +241,7 @@ export class QQBot {
   }
 
   private onGroupMsg(bot: QQBot, msg: GroupMessageWSMSG): void {
-    if (!bot.config.functionCommandGroup.includes(msg.group_id)) return;
+    if (!getFeatureGroups('command').includes(msg.group_id)) return;
     const command = msg.raw_message;
     if (!command.startsWith('/')) return;
     bot.commandManager.execute(new GroupMsgCommandSource(bot, msg), command);

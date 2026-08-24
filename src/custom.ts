@@ -15,7 +15,7 @@ import { Arguments, CommandManager, CommandSource } from 'gugle-command';
 import { MinecraftAPI } from '@/features/minecraft';
 import { ModrinthAPI } from '@/features/modrinth';
 import { EventDataManager } from '@/event';
-import { botConfig } from '@/config';
+import { getFeatureGroups } from '@/config/features';
 import { Bili } from '@/features/bili';
 import { Management } from '@/features/management';
 import { PeakValleyTimer } from '@/features/peak-valley-timer';
@@ -249,7 +249,7 @@ ${wiki.url}`);
           return;
         }
         if (needWrite) EventDataManager.setStorage('mcupdate', 'latest', version.latest).then();
-        for (const listener of botConfig.functionMinecraftGroup) {
+        for (const listener of getFeatureGroups('minecraft')) {
           bot.sendGroupMsg(listener, msg);
         }
       });

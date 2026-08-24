@@ -6,6 +6,7 @@ import { AllIssueEvent, AllPullRequestEvent, Issue, PullRequest } from '@/type/g
 import { GroupMessageWSMSG, Message, SentMessage, TextMessage } from '@/type';
 import { GitHubImage } from '@/features/github/image';
 import { botConfig } from '@/config';
+import { getFeatureGroups } from '@/config/features';
 import { GitHubBindingManager } from '@/features/github/binding';
 import axios, { AxiosInstance } from 'axios';
 
@@ -152,7 +153,7 @@ export class Github {
             }
           }
         ];
-        botConfig.functionGithubGroup.forEach(group => {
+        getFeatureGroups('github').forEach(group => {
           bot.sendGroupMsg(group, msg);
         });
         this.logger?.debug(`Sent process ${type} message...`);
@@ -184,7 +185,7 @@ export class Github {
   }
 
   public static processMessage(bot: QQBot, msg: GroupMessageWSMSG, sentMessage: Message[]): Promise<void> {
-    if (!botConfig.functionGithubGroup.includes(msg.group_id)) return Promise.resolve();
+    if (!getFeatureGroups('github').includes(msg.group_id)) return Promise.resolve();
 
     const receivedMessage: TextMessage[] = [];
     msg.message.forEach(message => {

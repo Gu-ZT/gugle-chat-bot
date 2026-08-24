@@ -10,14 +10,4 @@ export default class Constants {
   public static readonly HTTP_TOKEN = '';
   public static readonly GITHUB_PORT = 8848;
   public static readonly GITHUB_ALLOWED_REPOSITORIES = ['Anvil-Dev/*', 'Gu-ZT/*'];
-  public static readonly FUNCTION_COMMAND_GROUP = [703453948];
-  public static readonly FUNCTION_GITHUB_GROUP = [703453948];
-  public static readonly FUNCTION_MANAGEMENT_GROUP = [703453948];
-  public static readonly FUNCTION_MANAGEMENT_OPERATOR = [2308465862];
-  public static readonly FUNCTION_PARENTHESES_GROUP = [703453948];
-  public static readonly FUNCTION_POKE_GROUP = [703453948];
-  public static readonly FUNCTION_MINECRAFT_GROUP = [703453948];
-  public static readonly FUNCTION_MODRINTH_GROUP = [703453948];
-  public static readonly FUNCTION_BILI_FOLLOW = [5930630, 19428259, 19822751, 430207683];
-  public static readonly FUNCTION_BILI_GROUP = [703453948];
 }

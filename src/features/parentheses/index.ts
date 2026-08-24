@@ -1,5 +1,5 @@
 import { GroupMessageWSMSG, Message, TextMessage } from '@/type';
-import { botConfig } from '@/config';
+import { getFeatureGroups } from '@/config/features';
 
 export class ParenthesesMatching {
   static readonly bracketPairs: Record<string, string> = {};
@@ -52,7 +52,7 @@ export class ParenthesesMatching {
   }
 
   public static parenthesesMatching(msg: GroupMessageWSMSG, sentMessage: Message[]) {
-    if (!botConfig.functionParenthesesGroup.includes(msg.group_id)) return;
+    if (!getFeatureGroups('parentheses').includes(msg.group_id)) return;
     const receivedMessage: TextMessage[] = [];
     msg.message.forEach(message => {
       if (message.type != 'text') return;
