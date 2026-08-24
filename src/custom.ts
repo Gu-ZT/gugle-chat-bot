@@ -15,7 +15,7 @@ import { Arguments, CommandManager, CommandSource } from 'gugle-command';
 import { MinecraftAPI } from '@/features/minecraft';
 import { ModrinthAPI } from '@/features/modrinth';
 import { getFeatureGroups } from '@/config/features';
-import { checkStableVersion } from '@/features/version-tracker';
+import { checkReleasedVersion } from '@/features/version-tracker';
 import { Bili } from '@/features/bili';
 import { Management } from '@/features/management';
 import { PeakValleyTimer } from '@/features/peak-valley-timer';
@@ -197,11 +197,16 @@ ${wiki.url}`);
   public cronCheckMinecraftVersion() {
     MinecraftAPI.getVersion().then(version => {
       if (!version.success) return;
-      // release 与 snapshot 分别走稳定窗口确认，避免 CDN 缓存抖动重复发送
+      // 从 manifest 中按 id 查找 release / snapshot 的权威 releaseTime，
+      // 用时间戳单调性判断新发布，避免 CDN 缓存抖动重复发送
+      const releaseId = version.latest.release;
+      const snapshotId = version.latest.snapshot;
+      const releaseTime = version.versions.find(v => v.id === releaseId)?.releaseTime || '';
+      const snapshotTime = version.versions.find(v => v.id === snapshotId)?.releaseTime || '';
       Promise.all([
-        checkStableVersion('mcupdate:release', version.latest.release),
-        checkStableVersion('mcupdate:snapshot', version.latest.snapshot)
-      ]).then(([releaseStable, snapshotStable]) => {
+        checkReleasedVersion('mcupdate:release', releaseId, Date.parse(releaseTime) || 0),
+        checkReleasedVersion('mcupdate:snapshot', snapshotId, Date.parse(snapshotTime) || 0)
+      ]).then(([releaseNew, snapshotNew]) => {
         const msg: Message[] = [
           {
             type: 'text',
@@ -210,7 +215,7 @@ ${wiki.url}`);
             }
           }
         ];
-        if (releaseStable) {
+        if (releaseNew) {
           msg.push({
             type: 'text',
             data: {
@@ -224,7 +229,7 @@ ${wiki.url}`);
             }
           });
         }
-        if (snapshotStable) {
+        if (snapshotNew) {
           msg.push({
             type: 'text',
             data: {
@@ -245,8 +250,8 @@ ${wiki.url}`);
             }
           });
         }
-        // 只有 release 或 snapshot 任一被稳定确认才发送
-        if (!releaseStable && !snapshotStable) return;
+        // 只有 release 或 snapshot 任一被确认为新发布才发送
+        if (!releaseNew && !snapshotNew) return;
         for (const listener of getFeatureGroups('minecraft')) {
           bot.sendGroupMsg(listener, msg);
         }
