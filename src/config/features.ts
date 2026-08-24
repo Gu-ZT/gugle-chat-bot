@@ -38,11 +38,25 @@ export interface FeatureDefinition {
   /** bot-config.json 中旧操作人字段名（迁移用） */
   legacyOperatorsField?: string;
   /** 其他旧字段名 → 迁移到 extra 的键 */
+
   legacyExtraFields?: Record<string, string>;
   /** 当前配置版本 */
   version?: number;
   /** 迁移步骤 */
   migrations?: import('@/config/manager').MigrationStep[];
+}
+
+/**
+ * GitHub 功能配置（v2）。
+ *
+ * groups 从 v1 的 `number[]`（全仓库白名单群）升级为
+ * `Record<仓库 full_name, 订阅该仓库的群号[]>`——webhook 事件只推送到
+ * 对应仓库订阅的群，实现"仓库级订阅"。
+ */
+export interface GithubFeatureConfig {
+  version: number;
+  /** 仓库 full_name（如 Anvil-Dev/AnvilCraft）→ 订阅群号列表 */
+  groups: Record<string, number[]>;
 }
 
 export interface LegacyFunctionValues {
@@ -114,6 +128,49 @@ function isNumberArray(value: unknown): value is number[] {
   return Array.isArray(value) && value.every(item => typeof item === 'number' && Number.isSafeInteger(item));
 }
 
+function isGithubGroups(
+  value: unknown
+): value is Record<string, number[]> {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.entries(value as Record<string, unknown>).every(
+      ([repo, groups]) =>
+        typeof repo === 'string' && repo.includes('/') && isNumberArray(groups)
+    )
+  );
+}
+
+/** github.json 的默认工厂：v2 空订阅（无仓库订阅） */
+function githubFactory(): GithubFeatureConfig {
+  return { version: 2, groups: {} };
+}
+
+/** github.json 的 v1 → v2 迁移：旧 groups 数组（全仓库白名单群）拆给默认仓库 */
+function migrateGithubV1ToV2(data: Record<string, unknown>): Record<string, unknown> {
+  const legacyGroups = isNumberArray(data.groups) ? data.groups : [];
+  return {
+    groups: legacyGroups.length > 0 ? { 'Anvil-Dev/AnvilCraft': legacyGroups } : {}
+  };
+}
+
+/** github.json 规范化：接受 v2 Record；非法/损坏返回 null 触发备份重建 */
+function normalizeGithubConfig(raw: unknown): GithubFeatureConfig | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  if (isGithubGroups(record.groups)) {
+    return { version: 2, groups: record.groups };
+  }
+  // v1 遗留（groups 为数组）：转为 v2 结构（不落盘，读取时动态转换）
+  if (isNumberArray(record.groups)) {
+    const groups: Record<string, number[]> =
+      record.groups.length > 0 ? { 'Anvil-Dev/AnvilCraft': record.groups } : {};
+    return { version: 2, groups };
+  }
+  return { version: 2, groups: {} };
+}
+
 function normalizeFeatureConfig(def: FeatureDefinition, raw: unknown): FeatureConfig | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const record = raw as Record<string, unknown>;
@@ -182,6 +239,70 @@ export function watchFeatureConfig(defId: string, listener: (config: FeatureConf
 }
 
 // ---------------------------------------------------------------------------
+// GitHub 配置（v2：仓库级订阅）
+// 与通用 FeatureConfig 不同：groups 是 仓库 full_name → 订阅群号[]。
+// 独立 store 管理（configs/features/github.json，v1 → v2 自动迁移）。
+// ---------------------------------------------------------------------------
+
+const githubStore = new ConfigStore<GithubFeatureConfig>({
+  path: 'configs/features/github.json',
+  version: 2,
+  migrations: [{ from: 1, to: 2, migrate: migrateGithubV1ToV2 }],
+  factory: githubFactory,
+  normalize: normalizeGithubConfig
+});
+
+/** 读取 github 生效配置（v2：仓库 → 订阅群映射） */
+export function getGithubConfig(): GithubFeatureConfig {
+  return githubStore.get();
+}
+
+/** 读取某仓库的订阅群列表（无订阅返回空数组） */
+export function getGithubSubscribers(repository: string): number[] {
+  return getGithubConfig().groups[repository] || [];
+}
+
+/** 判断某群是否订阅了任意仓库（用于 processMessage 的启用判断） */
+export function isGithubEnabledGroup(groupId: number): boolean {
+  return Object.values(getGithubConfig().groups).some(list => list.includes(groupId));
+}
+
+/**
+ * 订阅：把群加入仓库的订阅列表（幂等；写入后热生效）。
+ * @returns 该仓库订阅后的完整群列表
+ */
+export function subscribeGithubRepository(repository: string, groupId: number): number[] {
+  const current = getGithubConfig();
+  const subscribers = Array.from(new Set([...(current.groups[repository] || []), groupId]));
+  const next: GithubFeatureConfig = {
+    version: 2,
+    groups: { ...current.groups, [repository]: subscribers }
+  };
+  githubStore.update(next);
+  return subscribers;
+}
+
+/**
+ * 取消订阅：把群从仓库的订阅列表移除。
+ * @returns 该仓库订阅后的完整群列表（群号不存在则不变）
+ */
+export function unsubscribeGithubRepository(repository: string, groupId: number): number[] {
+  const current = getGithubConfig();
+  const subscribers = (current.groups[repository] || []).filter(id => id !== groupId);
+  const nextGroups: Record<string, number[]> = { ...current.groups };
+  if (subscribers.length > 0) nextGroups[repository] = subscribers;
+  else delete nextGroups[repository];
+  const next: GithubFeatureConfig = { version: 2, groups: nextGroups };
+  githubStore.update(next);
+  return subscribers;
+}
+
+/** 仓库名格式校验（owner/name，均允许字母数字 . _ -） */
+export function isValidRepositoryName(repository: string): boolean {
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository);
+}
+
+// ---------------------------------------------------------------------------
 // 旧字段迁移：bot-config.json 的 function* → 各功能配置文件
 // ---------------------------------------------------------------------------
 
@@ -223,6 +344,17 @@ function readLegacyValues(def: FeatureDefinition, legacyRaw: Record<string, unkn
 }
 
 function applyLegacyToStore(def: FeatureDefinition, legacy: LegacyFunctionValues): void {
+  // github 使用专用 store（v2 仓库级订阅），旧 groups 数组拆给默认仓库
+  if (def.id === 'github') {
+    const legacyGroups = legacy.groups || [];
+    const current = githubStore.get();
+    const nextGroups: Record<string, number[]> = { ...current.groups };
+    if (legacyGroups.length > 0 && Object.keys(nextGroups).length === 0) {
+      nextGroups['Anvil-Dev/AnvilCraft'] = legacyGroups;
+    }
+    githubStore.update({ version: 2, groups: nextGroups });
+    return;
+  }
   const store = getStore(def);
   const current = store.get();
   const next: FeatureConfig = {

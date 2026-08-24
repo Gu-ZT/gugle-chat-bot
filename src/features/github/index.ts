@@ -6,7 +6,7 @@ import { AllIssueEvent, AllPullRequestEvent, Issue, PullRequest } from '@/type/g
 import { GroupMessageWSMSG, Message, SentMessage, TextMessage } from '@/type';
 import { GitHubImage } from '@/features/github/image';
 import { botConfig } from '@/config';
-import { getFeatureGroups } from '@/config/features';
+import { getGithubSubscribers, isGithubEnabledGroup } from '@/config/features';
 import { GitHubBindingManager } from '@/features/github/binding';
 import axios, { AxiosInstance } from 'axios';
 
@@ -129,7 +129,8 @@ export class Github {
     } else if (msg.action === 'closed') {
       promise = GitHubImage.issuesClosed(msg, this.logger);
     }
-    this.sendGeneratedImage(bot, 'issue', promise);
+    const repository = msg.repository.full_name;
+    this.sendGeneratedImage(bot, repository, 'issue', promise);
   }
 
   private listenPullRequestEvent(bot: QQBot, msg: AllPullRequestEvent) {
@@ -139,10 +140,20 @@ export class Github {
     } else if (msg.action === 'closed') {
       promise = GitHubImage.prClosed(msg, this.logger);
     }
-    this.sendGeneratedImage(bot, 'pull request', promise);
+    const repository = msg.repository.full_name;
+    this.sendGeneratedImage(bot, repository, 'pull request', promise);
   }
 
-  private sendGeneratedImage(bot: QQBot, type: string, result: Promise<string> | undefined = undefined) {
+  /**
+   * 把生成的图片推送给订阅了该仓库的群（仓库级路由）。
+   * 只发给 github.json 中 repository → 订阅群列表对应的群。
+   */
+  private sendGeneratedImage(bot: QQBot, repository: string, type: string, result: Promise<string> | undefined = undefined) {
+    const subscribers = getGithubSubscribers(repository);
+    if (subscribers.length === 0) {
+      this.logger?.debug(`No subscribers for repository ${repository}, skip ${type} message...`);
+      return;
+    }
     result
       ?.then(base64 => {
         const msg: SentMessage = [
@@ -153,10 +164,10 @@ export class Github {
             }
           }
         ];
-        getFeatureGroups('github').forEach(group => {
+        subscribers.forEach(group => {
           bot.sendGroupMsg(group, msg);
         });
-        this.logger?.debug(`Sent process ${type} message...`);
+        this.logger?.debug(`Sent process ${type} message of ${repository} to ${subscribers.length} group(s)...`);
       })
       .catch(e => {
         this.logger?.error(e);
@@ -185,7 +196,7 @@ export class Github {
   }
 
   public static processMessage(bot: QQBot, msg: GroupMessageWSMSG, sentMessage: Message[]): Promise<void> {
-    if (!getFeatureGroups('github').includes(msg.group_id)) return Promise.resolve();
+    if (!isGithubEnabledGroup(msg.group_id)) return Promise.resolve();
 
     const receivedMessage: TextMessage[] = [];
     msg.message.forEach(message => {

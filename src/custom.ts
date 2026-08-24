@@ -14,7 +14,7 @@ import { Poke } from '@/features/poke';
 import { Arguments, CommandManager, CommandSource } from 'gugle-command';
 import { MinecraftAPI } from '@/features/minecraft';
 import { ModrinthAPI } from '@/features/modrinth';
-import { getFeatureGroups } from '@/config/features';
+import { getFeatureGroups, isValidRepositoryName, subscribeGithubRepository } from '@/config/features';
 import { checkReleasedVersion } from '@/features/version-tracker';
 import { Bili } from '@/features/bili';
 import { Management } from '@/features/management';
@@ -29,6 +29,7 @@ class CustomBot {
 · /server <ip> <port?>：获取 Minecraft 服务器状态
 · /wiki <query>：搜索 Minecraft 维基
 · /github bind <Username>：绑定 GitHub 用户名
+· /github subscribe <owner/repo>：订阅仓库消息推送
 · /pvtime：查询当前是梁文峰时间还是梁文谷时间`);
   }
 
@@ -95,6 +96,25 @@ ${wiki.url}`);
       .catch(error => {
         source.fail(error instanceof Error ? error.message : String(error));
       });
+  }
+
+  public static githubSubscribeCommand(source: CommandSource, repository: string) {
+    if (!(source instanceof GroupMsgCommandSource)) {
+      source.fail('GitHub 订阅仅支持在群聊中使用');
+      return;
+    }
+    if (!isValidRepositoryName(repository)) {
+      source.fail(`仓库名格式错误：${repository}\n应为 owner/repo，例如 Anvil-Dev/AnvilCraft`);
+      return;
+    }
+    const subscribers = subscribeGithubRepository(repository, source.msg.group_id);
+    const current = subscribers.includes(source.msg.group_id)
+      ? `已订阅仓库 ${repository} 的消息推送`
+      : `订阅失败，请重试`;
+    source.success(
+      `${current}
+· 当前订阅该仓库的群：${subscribers.length > 0 ? subscribers.join('、') : '（无）'}`
+    );
   }
 
   @bot.subscribe('notice-event-notify', false)
@@ -182,6 +202,14 @@ ${wiki.url}`);
       CommandManager.literal('github').then(
         CommandManager.literal('bind').then(
           CommandManager.argument('username', Arguments.STRING).execute(CustomBot.githubBindCommand)
+        )
+      )
+    );
+    command.register(
+      'gugle-command',
+      CommandManager.literal('github').then(
+        CommandManager.literal('subscribe').then(
+          CommandManager.argument('repository', Arguments.STRING).execute(CustomBot.githubSubscribeCommand)
         )
       )
     );
