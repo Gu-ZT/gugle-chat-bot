@@ -239,14 +239,37 @@ function normalizeConfig(raw: PeakValleyTimerConfig | null): {
   return { groups, mode, time, peak_msg, valley_msg, cmd_peak_msg, cmd_valley_msg };
 }
 
+function writeConfigFile(config: PeakValleyTimerConfig): void {
+  fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+}
+
+function createBackupConfigFile(contents: string): void {
+  const { dir, ext, name } = path.parse(CONFIG_PATH);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  let backupPath = path.join(dir, `${name}.bak.${timestamp}${ext}`);
+  let index = 1;
+  while (fs.existsSync(backupPath)) {
+    backupPath = path.join(dir, `${name}.bak.${timestamp}.${index}${ext}`);
+    index++;
+  }
+  fs.writeFileSync(backupPath, contents, 'utf8');
+}
+
 function loadConfig(): ReturnType<typeof normalizeConfig> {
   let raw: PeakValleyTimerConfig | null = null;
   if (fs.existsSync(CONFIG_PATH)) {
+    const contents = fs.readFileSync(CONFIG_PATH, 'utf8');
     try {
-      raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as PeakValleyTimerConfig;
+      raw = JSON.parse(contents) as PeakValleyTimerConfig;
     } catch (_) {
+      // 配置损坏：备份原文件后回退默认，避免启动失败
+      createBackupConfigFile(contents);
       raw = null;
     }
+  } else {
+    // 配置缺失：自动创建默认配置
+    writeConfigFile(defaultConfig);
   }
   return normalizeConfig(raw);
 }
