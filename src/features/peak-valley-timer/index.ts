@@ -321,7 +321,9 @@ export class PeakValleyTimer {
   }
 
   /**
-   * /pvtime 命令处理：根据当前时间是否处于某个 peak/valley 区间返回对应消息
+   * /pvtime 命令处理：根据当前时间是否处于某个 peak/valley 区间返回对应消息。
+   * 命中区间 → 该区间类型（自身 mode 优先，否则全局 mode）的 cmd 消息；
+   * 未命中任何区间 → 全局 mode 相反类型的 cmd 消息。
    */
   public getCommandMessage(): string {
     const now = dayjs();
@@ -329,36 +331,27 @@ export class PeakValleyTimer {
     const nowMinutes = now.hour() * 60 + now.minute();
     const currentTime = now.format('HH:mm');
 
-    // 找到当前命中的区间（同一天内且处于 [start, end) 内）
-    let mode: PeakValleyMode | undefined = undefined;
-    let hasRange = false;
     for (const range of this.time) {
-      if (!range.days.includes(weekday)) continue;
-      const endMinutes = range.endMinutes;
-      let inRange = false;
-      if (endMinutes > range.startMinutes) {
-        inRange = nowMinutes >= range.startMinutes && nowMinutes < endMinutes;
-      } else {
-        // 跨天区间：end <= start（如 22:00-02:00）
-        inRange = nowMinutes >= range.startMinutes || nowMinutes < endMinutes;
-      }
-      if (inRange) {
-        hasRange = true;
-        if (range.mode) {
-          mode = range.mode;
-          break;
-        }
+      if (this.isInRange(range, weekday, nowMinutes)) {
+        const rangeMode: PeakValleyMode = range.mode ?? this.mode;
+        return this.renderMessage(rangeMode === 'peak' ? this.cmdPeakMsg : this.cmdValleyMsg, currentTime);
       }
     }
-
-    if (!hasRange) return this.currentModeMessage(this.cmdPeakMsg, this.cmdValleyMsg, currentTime);
-    if (mode) return this.renderMessage(mode === 'peak' ? this.cmdPeakMsg : this.cmdValleyMsg, currentTime);
-    // 区间未指定 mode，回退到全局 mode
-    return this.currentModeMessage(this.cmdPeakMsg, this.cmdValleyMsg, currentTime);
+    const opposite: PeakValleyMode = this.mode === 'peak' ? 'valley' : 'peak';
+    return this.renderMessage(opposite === 'peak' ? this.cmdPeakMsg : this.cmdValleyMsg, currentTime);
   }
 
-  private currentModeMessage(peakTemplate: string, valleyTemplate: string, currentTime: string): string {
-    return this.renderMessage(this.mode === 'valley' ? valleyTemplate : peakTemplate, currentTime);
+  /**
+   * 判断某时刻是否处于区间内。区间归属日：不跨天区间当天在 days 中；
+   * 跨天区间（end <= start）[start, 24:00) 当天在 days，[0, end) 前一天在 days。
+   */
+  private isInRange(range: NormalizedTimeRange, weekday: number, nowMinutes: number): boolean {
+    if (range.endMinutes > range.startMinutes) {
+      return range.days.includes(weekday) && nowMinutes >= range.startMinutes && nowMinutes < range.endMinutes;
+    }
+    if (nowMinutes >= range.startMinutes && range.days.includes(weekday)) return true;
+    if (nowMinutes < range.endMinutes && range.days.includes((weekday + 6) % 7)) return true;
+    return false;
   }
 
   private renderMessage(template: string, currentTime: string): string {
@@ -373,37 +366,91 @@ export class PeakValleyTimer {
     const nowMinutes = now.hour() * 60 + now.minute();
 
     for (const range of this.time) {
-      if (!range.days.includes(weekday)) continue;
-      const elapsed = secondsIntoDay - range.startMinutes * 60;
-      if (elapsed < 0 || elapsed >= CATCH_UP_WINDOW_SECONDS) continue;
-      const reportKey = `${today}:${range.key}`;
-      if (this.reportedToday.has(reportKey)) continue;
-      this.reportedToday.add(reportKey);
-      bot.logger?.info(`PeakValleyTimer triggered: ${range.key} at ${nowMinutes}`);
-      const message = this.buildMessage(range, now);
-      for (const groupId of this.groups) {
-        const sentMessage: Message[] = [
-          {
-            type: 'text',
-            data: {
-              text: message
-            }
-          }
-        ];
-        bot.sendGroupMsg(groupId, sentMessage);
-      }
+      this.checkStart(bot, range, today, weekday, secondsIntoDay, now, nowMinutes);
+      this.checkEnd(bot, range, today, weekday, secondsIntoDay, now, nowMinutes);
     }
   }
 
-  private buildMessage(range: NormalizedTimeRange, now: dayjs.Dayjs): string {
+  /**
+   * 区间开始触发：当天在 days 中且到达 start 时刻 → 报区间类型"到"。
+   */
+  private checkStart(
+    bot: QQBot,
+    range: NormalizedTimeRange,
+    today: string,
+    weekday: number,
+    secondsIntoDay: number,
+    now: dayjs.Dayjs,
+    nowMinutes: number
+  ): void {
+    if (!range.days.includes(weekday)) return;
+    const elapsed = secondsIntoDay - range.startMinutes * 60;
+    if (elapsed < 0 || elapsed >= CATCH_UP_WINDOW_SECONDS) return;
+    const reportKey = `${today}:${range.key}:start`;
+    if (this.reportedToday.has(reportKey)) return;
+    this.reportedToday.add(reportKey);
+    bot.logger?.info(`PeakValleyTimer start triggered: ${range.key} at ${nowMinutes}`);
+    const rangeMode: PeakValleyMode = range.mode ?? this.mode;
+    const message = this.buildMessage(rangeMode, range.msg, now);
+    this.broadcast(bot, message);
+  }
+
+  /**
+   * 区间结束触发：到达 end 时刻 → 报相反类型"到"（离开该类型时段）。
+   * 不跨天：end 触发日在 days 中当天；跨天（end <= start）：start 在
+   * 开始日 D 的 startMinutes，end 在 D+1 的 endMinutes，因此要求
+   * 前一天在 days 中，且此刻尚未到今天的 start。
+   */
+  private checkEnd(
+    bot: QQBot,
+    range: NormalizedTimeRange,
+    today: string,
+    weekday: number,
+    secondsIntoDay: number,
+    now: dayjs.Dayjs,
+    nowMinutes: number
+  ): void {
+    if (range.endMinutes > range.startMinutes) {
+      if (!range.days.includes(weekday)) return;
+    } else {
+      // 跨天区间：end 在开始日的次日凌晨
+      const prevWeekday = (weekday + 6) % 7;
+      if (!range.days.includes(prevWeekday)) return;
+      if (nowMinutes >= range.startMinutes) return; // 今天已到 start，属于新一轮区间
+    }
+    const elapsed = secondsIntoDay - range.endMinutes * 60;
+    if (elapsed < 0 || elapsed >= CATCH_UP_WINDOW_SECONDS) return;
+    const reportKey = `${today}:${range.key}:end`;
+    if (this.reportedToday.has(reportKey)) return;
+    this.reportedToday.add(reportKey);
+    bot.logger?.info(`PeakValleyTimer end triggered: ${range.key} at ${nowMinutes}`);
+    const rangeMode: PeakValleyMode = range.mode ?? this.mode;
+    const opposite: PeakValleyMode = rangeMode === 'peak' ? 'valley' : 'peak';
+    const message = this.buildMessage(opposite, range.msg, now);
+    this.broadcast(bot, message);
+  }
+
+  private broadcast(bot: QQBot, message: string): void {
+    for (const groupId of this.groups) {
+      const sentMessage: Message[] = [
+        {
+          type: 'text',
+          data: {
+            text: message
+          }
+        }
+      ];
+      bot.sendGroupMsg(groupId, sentMessage);
+    }
+  }
+
+  private buildMessage(rangeMode: PeakValleyMode, customMsg: string | undefined, now: dayjs.Dayjs): string {
     const currentTime = now.format('HH:mm');
     let template: string;
-    if (range.msg) {
-      template = range.msg;
-    } else if (range.mode) {
-      template = range.mode === 'valley' ? this.valleyMsg : this.peakMsg;
+    if (customMsg) {
+      template = customMsg;
     } else {
-      template = this.mode === 'valley' ? this.valleyMsg : this.peakMsg;
+      template = rangeMode === 'valley' ? this.valleyMsg : this.peakMsg;
     }
     return template.replace(/\$\{time\}/g, currentTime);
   }
