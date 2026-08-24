@@ -1,8 +1,7 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import dayjs from 'dayjs';
 import { QQBot } from '@/index';
-import { botConfig } from '@/config';
+import { getFeatureGroups } from '@/config/features';
+import { readOrCreate } from '@/config/manager';
 import { Message } from '@/type';
 
 export type PeakValleyMode = 'peak' | 'valley';
@@ -36,8 +35,6 @@ interface NormalizedTimeRange {
   key: string;
 }
 
-const CONFIG_PATH: string = path.resolve(process.cwd(), 'configs', 'peak-valley-timer.json');
-
 const DAY_MAP: Record<DayToken, number> = {
   Mon: 1,
   Tue: 2,
@@ -56,7 +53,7 @@ const CHECK_INTERVAL_MS = 30 * 1000;
 const CATCH_UP_WINDOW_SECONDS = 90;
 
 const defaultConfig: PeakValleyTimerConfig = {
-  groups: botConfig.functionCommandGroup,
+  groups: getFeatureGroups('command'),
   mode: 'peak',
   time: ['9:00-12:00 Mon-Fri', '14:00-18:00 Mon-Fri'],
   peak_msg: '梁文峰时间到！\n当前时间是${time}',
@@ -239,39 +236,22 @@ function normalizeConfig(raw: PeakValleyTimerConfig | null): {
   return { groups, mode, time, peak_msg, valley_msg, cmd_peak_msg, cmd_valley_msg };
 }
 
-function writeConfigFile(config: PeakValleyTimerConfig): void {
-  fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
-}
-
-function createBackupConfigFile(contents: string): void {
-  const { dir, ext, name } = path.parse(CONFIG_PATH);
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  let backupPath = path.join(dir, `${name}.bak.${timestamp}${ext}`);
-  let index = 1;
-  while (fs.existsSync(backupPath)) {
-    backupPath = path.join(dir, `${name}.bak.${timestamp}.${index}${ext}`);
-    index++;
-  }
-  fs.writeFileSync(backupPath, contents, 'utf8');
+function normalizeRawConfig(raw: unknown): PeakValleyTimerConfig | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const time = record.time;
+  if (time !== undefined && !Array.isArray(time)) return null;
+  return raw as PeakValleyTimerConfig;
 }
 
 function loadConfig(): ReturnType<typeof normalizeConfig> {
-  let raw: PeakValleyTimerConfig | null = null;
-  if (fs.existsSync(CONFIG_PATH)) {
-    const contents = fs.readFileSync(CONFIG_PATH, 'utf8');
-    try {
-      raw = JSON.parse(contents) as PeakValleyTimerConfig;
-    } catch (_) {
-      // 配置损坏：备份原文件后回退默认，避免启动失败
-      createBackupConfigFile(contents);
-      raw = null;
-    }
-  } else {
-    // 配置缺失：自动创建默认配置
-    writeConfigFile(defaultConfig);
-  }
-  return normalizeConfig(raw);
+  const { data } = readOrCreate<PeakValleyTimerConfig>({
+    path: 'configs/peak-valley-timer.json',
+    factory: () => defaultConfig,
+    version: 1,
+    normalize: normalizeRawConfig
+  });
+  return normalizeConfig(data);
 }
 
 export class PeakValleyTimer {

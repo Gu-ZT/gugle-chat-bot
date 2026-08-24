@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { readOrCreate } from '@/config/manager';
 
 export class EventDataManager {
   private static readonly FILE: string = './configs/event-data.json';
@@ -71,69 +72,37 @@ export class EventDataManager {
 
   public static async checkAndCreateFile(): Promise<void> {
     EventDataManager.migrateLegacyFile();
-    if (!fs.existsSync(EventDataManager.FILE)) {
-      fs.mkdirSync('./configs', { recursive: true });
-      fs.writeFile(
-        EventDataManager.FILE,
-        JSON.stringify(
-          {
-            listeners: {},
-            storage: {}
-          },
-          null,
-          4
-        ),
-        err => {
-          if (err) Promise.reject(err);
-          else Promise.resolve();
-        }
-      );
-    }
+    readOrCreate<{ listeners: Record<string, never>; storage: Record<string, never> }>({
+      path: EventDataManager.FILE,
+      factory: () => ({ listeners: {}, storage: {} })
+    });
   }
 
   public static async load(): Promise<void> {
     await EventDataManager.checkAndCreateFile();
-    return new Promise((resolve, reject) => {
-      fs.readFile(EventDataManager.FILE, (err, data) => {
-        if (err) {
-          EventDataManager.listeners = {};
-          EventDataManager.storage = {};
-          reject(err);
-        } else {
-          try {
-            const json = JSON.parse(data.toString());
-            EventDataManager.listeners = {
-              ...EventDataManager.listeners,
-              ...json.listeners
-            };
-            EventDataManager.storage = {
-              ...EventDataManager.storage,
-              ...json.storage
-            };
-            resolve();
-          } catch (_) {
-            this.save();
-          }
-        }
-      });
-    });
+    const data = readOrCreate<{
+      listeners?: Record<string, { roomId: string; channelId: string }[]>;
+      storage?: Record<string, Record<string, unknown>>;
+    }>({
+      path: EventDataManager.FILE,
+      factory: () => ({ listeners: {}, storage: {} })
+    }).data;
+    EventDataManager.listeners = {
+      ...EventDataManager.listeners,
+      ...(data.listeners || {})
+    };
+    EventDataManager.storage = {
+      ...EventDataManager.storage,
+      ...(data.storage || {})
+    };
   }
 
   public static async save(): Promise<void> {
     await EventDataManager.checkAndCreateFile();
-    const data = JSON.stringify(
-      {
-        listeners: EventDataManager.listeners,
-        storage: EventDataManager.storage
-      },
-      null,
-      4
-    );
-    return new Promise((resolve, reject) => {
-      fs.writeFile(EventDataManager.FILE, data, err => {
-        if (!err) resolve();
-        else reject(err);
-      });
+    const { writeConfigFile } = await import('@/config/manager');
+    writeConfigFile(EventDataManager.FILE, {
+      listeners: EventDataManager.listeners,
+      storage: EventDataManager.storage
     });
   }
 }

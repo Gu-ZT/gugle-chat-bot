@@ -1,7 +1,7 @@
 import { randomInt } from 'node:crypto';
-import fs from 'node:fs';
 import path from 'node:path';
 import axios from 'axios';
+import { readOrCreate, writeConfigFile } from '@/config/manager';
 
 interface PendingBinding {
   code: string;
@@ -111,47 +111,41 @@ export class GitHubBindingManager {
   private static load(): GitHubBindings {
     if (GitHubBindingManager.bindings) return GitHubBindingManager.bindings;
 
-    fs.mkdirSync(path.dirname(GitHubBindingManager.FILE), { recursive: true });
-    if (!fs.existsSync(GitHubBindingManager.FILE)) {
-      GitHubBindingManager.bindings = { bindings: {}, githubToQq: {}, pending: {} };
-      GitHubBindingManager.save();
-      return GitHubBindingManager.bindings;
-    }
+    const { data } = readOrCreate<GitHubBindings>({
+      path: GitHubBindingManager.FILE,
+      factory: () => ({ bindings: {}, githubToQq: {}, pending: {} }),
+      normalize: raw => {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+        const parsed = raw as Partial<GitHubBindings>;
+        const bindings: Record<string, string[]> =
+          parsed.bindings && typeof parsed.bindings === 'object' ? (parsed.bindings as Record<string, string[]>) : {};
+        const githubToQq: Record<string, string> =
+          parsed.githubToQq && typeof parsed.githubToQq === 'object' ? (parsed.githubToQq as Record<string, string>) : {};
 
-    try {
-      const parsed = JSON.parse(fs.readFileSync(GitHubBindingManager.FILE, 'utf8')) as Partial<GitHubBindings>;
-      const bindings: Record<string, string[]> =
-        parsed.bindings && typeof parsed.bindings === 'object' ? parsed.bindings : {};
-      const githubToQq: Record<string, string> =
-        parsed.githubToQq && typeof parsed.githubToQq === 'object' ? parsed.githubToQq : {};
-      let needsSave = !parsed.githubToQq;
-
-      for (const [qqUserId, usernames] of Object.entries(bindings)) {
-        if (!Array.isArray(usernames)) continue;
-        for (const username of usernames) {
-          if (typeof username !== 'string') continue;
-          const normalizedUsername = username.toLowerCase();
-          if (!githubToQq[normalizedUsername]) {
-            githubToQq[normalizedUsername] = qqUserId;
-            needsSave = true;
+        for (const [qqUserId, usernames] of Object.entries(bindings)) {
+          if (!Array.isArray(usernames)) continue;
+          for (const username of usernames) {
+            if (typeof username !== 'string') continue;
+            const normalizedUsername = username.toLowerCase();
+            if (!githubToQq[normalizedUsername]) {
+              githubToQq[normalizedUsername] = qqUserId;
+            }
           }
         }
+
+        return {
+          bindings,
+          githubToQq,
+          pending: parsed.pending && typeof parsed.pending === 'object' ? (parsed.pending as Record<string, PendingBinding>) : {}
+        };
       }
-
-      GitHubBindingManager.bindings = {
-        bindings,
-        githubToQq,
-        pending: parsed.pending && typeof parsed.pending === 'object' ? parsed.pending : {}
-      };
-      if (needsSave) GitHubBindingManager.save();
-    } catch (error) {
-      throw new Error(`无法加载 GitHub 绑定数据：${error instanceof Error ? error.message : String(error)}`);
-    }
-
+    });
+    GitHubBindingManager.bindings = data;
     return GitHubBindingManager.bindings;
   }
 
   private static save(): void {
-    fs.writeFileSync(GitHubBindingManager.FILE, `${JSON.stringify(GitHubBindingManager.bindings, null, 2)}\n`, 'utf8');
+    if (!GitHubBindingManager.bindings) return;
+    writeConfigFile(GitHubBindingManager.FILE, GitHubBindingManager.bindings);
   }
 }
