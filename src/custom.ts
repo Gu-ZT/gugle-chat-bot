@@ -18,14 +18,22 @@ import { EventDataManager } from '@/event';
 import { botConfig } from '@/config';
 import { Bili } from '@/features/bili';
 import { Management } from '@/features/management';
+import { PeakValleyTimer } from '@/features/peak-valley-timer';
 
 class CustomBot {
+  private static readonly peakValleyTimer: PeakValleyTimer = PeakValleyTimer.getInstance();
+
   public static helpCommand(source: CommandSource) {
     source.success(`帮助
 · /mcv：获取 Minecraft 版本信息
 · /server <ip> <port?>：获取 Minecraft 服务器状态
 · /wiki <query>：搜索 Minecraft 维基
-· /github bind <Username>：绑定 GitHub 用户名`);
+· /github bind <Username>：绑定 GitHub 用户名
+· /pvtime：查询当前是梁文峰时间还是梁文谷时间`);
+  }
+
+  public static peakValleyTimeCommand(source: CommandSource) {
+    source.success(CustomBot.peakValleyTimer.getCommandMessage());
   }
 
   public static minecraftVersionCommand(source: CommandSource) {
@@ -177,6 +185,12 @@ ${wiki.url}`);
         )
       )
     );
+    command.register('gugle-command', CommandManager.literal('pvtime').execute(CustomBot.peakValleyTimeCommand));
+  }
+
+  @bot.subscribe('after-start', false)
+  public startPeakValleyTimer(bot: QQBot): void {
+    CustomBot.peakValleyTimer.start(bot);
   }
 
   @bot.cron('0/30 * * * * *')
