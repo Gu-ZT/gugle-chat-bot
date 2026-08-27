@@ -223,18 +223,20 @@ ${wiki.url}`);
         CommandManager.argument('query', Arguments.STRING).execute(CustomBot.wikiCommand)
       )
     );
-    const githubNode = CommandManager.literal('github');
-    githubNode.then(
-      CommandManager.literal('bind').then(
-        CommandManager.argument('username', Arguments.STRING).execute(CustomBot.githubBindCommand)
-      )
+    command.register(
+      'gugle-command',
+      CommandManager.literal('github')
+        .then(
+          CommandManager.literal('bind').then(
+            CommandManager.argument('username', Arguments.STRING).execute(CustomBot.githubBindCommand)
+          )
+        )
+        .then(
+          CommandManager.literal('subscribe').then(
+            CommandManager.argument('repository', Arguments.STRING).execute(CustomBot.githubSubscribeCommand)
+          )
+        )
     );
-    githubNode.then(
-      CommandManager.literal('subscribe').then(
-        CommandManager.argument('repository', Arguments.STRING).execute(CustomBot.githubSubscribeCommand)
-      )
-    );
-    command.register('gugle-command', githubNode);
     command.register(
       'gugle-command',
       CommandManager.literal('pardon').then(
