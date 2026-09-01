@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import puppeteer, { Browser } from 'puppeteer';
+import puppeteer, { Browser, Page } from 'puppeteer';
 import { botConfig } from '@/config';
 
 export class Template {
@@ -175,6 +175,24 @@ process.once('exit', () => {
 });
 
 /**
+ * 等待页面中所有 <img> 元素加载完成。
+ * 轮询检查：所有图片 complete 且 naturalWidth > 0（加载成功）；
+ * 没有图片时立即返回。最多等待 timeoutMs，超时仍继续（不阻塞截图）。
+ */
+async function waitForImagesLoaded(page: Page, timeoutMs: number = 30000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const pending = await page.evaluate(() => {
+      const images = Array.from(document.querySelectorAll('img'));
+      if (images.length === 0) return 0;
+      return images.filter(img => !img.complete || img.naturalWidth === 0).length;
+    });
+    if (pending === 0) return;
+    await new Promise(r => setTimeout(r, 200));
+  }
+}
+
+/**
  * 用共享 Chrome 实例渲染 HTML 并截图。
  * 若提供 templateFile，则用 file:// 加载该文件（以模板所在目录为相对路径根，
  * 相对路径的 CSS/资源会按此解析），并在页面内替换 {{xxx}} 占位符；
@@ -202,8 +220,12 @@ async function renderWithSharedBrowser(
           }
         });
       }, html);
+      // 等待替换后插入的图片加载完成（data URL / 相对路径），避免截图时图片缺失
+      await waitForImagesLoaded(page);
     } else {
       await page.setContent(html, { waitUntil: 'networkidle0', timeout: 60000 });
+      // setContent 路径同样等待图片加载完成
+      await waitForImagesLoaded(page);
     }
     const element = await page.$('body');
     if (!element) {
