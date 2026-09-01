@@ -16,7 +16,7 @@ export function videoHandler(bot: QQBot, viewData: ViewData, logger?: Logger): P
       })
     ]).then(() => {
       const description = `<p>${viewData.desc.split('\n').join('</p>\n<p>')}</p>`;
-      Template.load('video', 'src/features/bili/template')
+      const template = Template.load('video', 'src/features/bili/template')
         .arg('title', viewData.title)
         .arg('description', description)
         .arg('cover', viewData.pic)
@@ -26,11 +26,13 @@ export function videoHandler(bot: QQBot, viewData: ViewData, logger?: Logger): P
         .arg('duration', convertDuration(viewData.duration))
         .arg('view', convertStat(viewData.stat.view))
         .arg('like', convertStat(viewData.stat.like))
-        .arg('reply', convertStat(viewData.stat.reply))
+        .arg('reply', convertStat(viewData.stat.reply));
+      const templateFile = template.file();
+      template
         .handler()
         .then(video => {
           logger?.debug(`Start process video message...`);
-          tryGenerateImage(resolve, reject, video);
+          tryGenerateImage(resolve, reject, video, 820, templateFile);
         });
     });
   });

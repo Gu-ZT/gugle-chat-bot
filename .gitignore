@@ -10,3 +10,4 @@ git/
 /configs/
 reference/
 #github-logs/
+dist/

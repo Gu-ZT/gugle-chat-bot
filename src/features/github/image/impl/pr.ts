@@ -94,7 +94,7 @@ export function prHandler(pr: PullRequest, logger?: Logger, operation?: string, 
     headerExtra = `<div class="message">用户<div class="user">${sender.login}</div>${operation}了 </div>`;
   }
   return new Promise<string>((resolve, reject) => {
-    Template.load('pull_request', 'src/features/github/template')
+    const template = Template.load('pull_request', 'src/features/github/template')
       .arg('header extra', headerExtra || '')
       .arg('repository owner', getRepositoryParts(pr.repository_url, pr.html_url).owner)
       .arg('repository name', getRepositoryParts(pr.repository_url, pr.html_url).name)
@@ -105,11 +105,13 @@ export function prHandler(pr: PullRequest, logger?: Logger, operation?: string, 
       .arg('pr author', pr.user.login)
       .arg('pr created at', dayjs(pr.created_at).format('YYYY-MM-DD HH:mm:ss'))
       .arg('state label', getPullRequestState(pr))
-      .arg('extra', extra || '')
+      .arg('extra', extra || '');
+    const templateFile = template.file();
+    template
       .handler()
       .then(pr => {
         logger?.debug(`Start process pull request message...`);
-        tryGenerateImage(resolve, reject, pr);
+        tryGenerateImage(resolve, reject, pr, 820, templateFile);
       })
       .catch(reject);
   });

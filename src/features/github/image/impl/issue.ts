@@ -75,7 +75,7 @@ export function issuesHandler(issue: Issue, logger?: Logger, operation?: string,
     headerExtra = `<div class="message">用户<div class="user">${sender.login}</div>${operation}了 </div>`;
   }
   return new Promise<string>((resolve, reject) => {
-    Template.load('issue', 'src/features/github/template')
+    const template = Template.load('issue', 'src/features/github/template')
       .arg('header extra', headerExtra || '')
       .arg('repository owner', getRepositoryParts(issue.repository_url, issue.html_url).owner)
       .arg('repository name', getRepositoryParts(issue.repository_url, issue.html_url).name)
@@ -86,11 +86,13 @@ export function issuesHandler(issue: Issue, logger?: Logger, operation?: string,
       .arg('issue body', renderMarkdown(issue.body))
       .arg('issue created at', dayjs(issue.created_at).format('YYYY-MM-DD HH:mm:ss'))
       .arg('issue labels', labelsHtml || 'No labels')
-      .arg('extra', extra || '')
+      .arg('extra', extra || '');
+    const templateFile = template.file();
+    template
       .handler()
       .then(issue => {
         logger?.debug(`Start process issue message...`);
-        tryGenerateImage(resolve, reject, issue);
+        tryGenerateImage(resolve, reject, issue, 820, templateFile);
       })
       .catch(reject);
   });
