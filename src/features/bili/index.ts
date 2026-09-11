@@ -20,28 +20,30 @@ export class Bili {
     return Promise.resolve();
   }
 
-  public static getVideoInfo(bot: QQBot, msg: GroupMessageWSMSG, vid: string, sentMessage: Message[]) {
+  public static getVideoInfo(bot: QQBot, msg: GroupMessageWSMSG, vid: string, sentMessage: Message[]): Promise<void> {
     const params = vid.startsWith('BV') ? { bvid: vid } : { aid: vid.slice(2) };
-    return new Promise<void>((resolve, reject) => {
-      bot.axiosInstance
-        .get<{ data: ViewData }>('https://api.bilibili.com/x/web-interface/view', {
-          params: {
-            ...params
+    return bot.axiosInstance
+      .get<{ code: number; message: string; data: ViewData }>('https://api.bilibili.com/x/web-interface/view', {
+        params: {
+          ...params
+        }
+      })
+      .then(res => {
+        const { code, message, data } = res.data;
+        // B 站业务错误（如 -412 请求被拦截、-404 视频不存在）走异常分支，
+        // 由调用方统一处理，避免在 then 中静默失败
+        if (code !== 0) {
+          throw new Error(`B 站接口返回错误（${code}）：${message || '未知错误'}`);
+        }
+        return BiliImage.videoHandler(bot, data, bot.logger);
+      })
+      .then(result => {
+        sentMessage.push({
+          type: 'image',
+          data: {
+            file: `data:image/png;base64, ${result}`
           }
-        })
-        .then(res => {
-          const { data } = res.data;
-          BiliImage.videoHandler(bot, data, bot.logger).then(result => {
-            sentMessage.push({
-              type: 'image',
-              data: {
-                file: `data:image/png;base64, ${result}`
-              }
-            });
-            resolve();
-          });
-        })
-        .catch(reject);
-    });
+        });
+      });
   }
 }

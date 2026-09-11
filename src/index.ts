@@ -419,6 +419,17 @@ export class QQBot {
 
 export const bot = new QQBot(botConfig);
 
+// 全局兜底：单个异步任务失败（如 B 站返回 412、网络超时）不应终止机器人进程。
+// 未处理的 Promise rejection 与未捕获异常统一记录日志后继续运行。
+process.on('unhandledRejection', reason => {
+  const error = reason instanceof Error ? reason : new Error(String(reason));
+  (bot.logger ?? console).error(`Unhandled promise rejection: ${error.stack ?? error.message}`);
+});
+
+process.on('uncaughtException', error => {
+  (bot.logger ?? console).error(`Uncaught exception: ${error.stack ?? error.message}`);
+});
+
 require('@/custom');
 
 bot.start().then(bot => {

@@ -249,6 +249,7 @@ export class Github {
                         text: `图片处理失败，原因：${e.message}`
                       }
                     });
+                    resolve();
                   });
               })
               .catch(e => {
@@ -259,6 +260,7 @@ export class Github {
                     text: `请求失败，原因：${e.message}`
                   }
                 });
+                resolve();
               });
           } else {
             // 处理 issue
@@ -280,6 +282,7 @@ export class Github {
                     text: `图片处理失败，原因：${e.message}`
                   }
                 });
+                resolve();
               });
           }
         })
@@ -291,6 +294,7 @@ export class Github {
               text: `请求失败，原因：${error.message}`
             }
           });
+          resolve();
         });
     });
   }

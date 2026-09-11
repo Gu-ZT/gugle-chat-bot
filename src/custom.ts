@@ -180,13 +180,21 @@ ${wiki.url}`);
       }
     ];
     ParenthesesMatching.parenthesesMatching(msg, sentMessage);
-    Github.processMessage(bot, msg, sentMessage).then(() => {
-      Bili.processMessage(bot, msg, sentMessage).then(() => {
+    // 各处理器失败只记录日志：既不能产生未处理的 rejection（会终止进程），
+    // 也不能中断后续处理器与最终的消息发送
+    Github.processMessage(bot, msg, sentMessage)
+      .catch(e => {
+        bot.logger?.error(`Github message process failed: ${e?.message ?? e}`);
+      })
+      .then(() => Bili.processMessage(bot, msg, sentMessage))
+      .catch(e => {
+        bot.logger?.error(`Bili message process failed: ${e?.message ?? e}`);
+      })
+      .then(() => {
         if (sentMessage.length > 1) {
           bot.sendGroupMsg(msg.group_id, sentMessage);
         }
       });
-    });
   }
 
   @bot.subscribe('notice-event-group-decrease', false)
