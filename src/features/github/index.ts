@@ -8,6 +8,7 @@ import { GitHubImage } from '@/features/github/image';
 import { botConfig } from '@/config';
 import { getGithubSubscribers, isGithubEnabledGroup } from '@/config/features';
 import { GitHubBindingManager } from '@/features/github/binding';
+import { fetchGithubApi } from '@/features/github/api';
 import axios, { AxiosInstance } from 'axios';
 
 export class Github {
@@ -15,24 +16,6 @@ export class Github {
   private readonly logger: Logger;
   private readonly eventManager: EventManager;
   private httpServer: http.Server<typeof http.IncomingMessage, typeof http.ServerResponse>;
-
-  private static readonly proxies = [
-    'https://cdn.gh-proxy.org/',
-    'https://gh-proxy.top/',
-    'https://gh.noki.icu/',
-    'https://gh.dpik.top/',
-    'https://tvv.tw/',
-    'https://gh.inkchills.cn/',
-    'https://git.yylx.win/',
-    'https://gh.felicity.ac.cn/',
-    'https://github.dpik.top/',
-    'https://gh.927223.xyz/',
-    'https://cdn.akaere.online/',
-    'https://jiashu.1win.eu.org/',
-    'https://github.tbedu.top/',
-    'https://gh.fhjhy.top/',
-    'https://gh.sixyin.com/'
-  ];
 
   public static readonly axiosInstance: AxiosInstance = axios.create({
     timeout: 15000,
@@ -43,50 +26,12 @@ export class Github {
     }
   });
 
-  private static readonly GITHUB_API_BASE = 'https://api.github.com';
-
   /**
-   * 使用代理轮询请求 GitHub API
-   * @param bot QQBot 实例
-   * @param apiPath GitHub API 路径（不含域名）
-   * @param proxyIndex 当前尝试的代理索引
-   * @param errors 累积的错误列表
-   * @returns Promise 返回请求数据
+   * 请求 GitHub API（经 ghapi.anvilcraft.dev 反代），供 processMessage 使用。
+   * @param apiPath GitHub API 路径（不含域名），如 /repos/owner/repo/issues/123
    */
-  private static requestWithProxyFallback<T>(
-    bot: QQBot,
-    apiPath: string,
-    proxyIndex: number = 0,
-    errors: Error[] = []
-  ): Promise<T> {
-    // 所有代理都失败
-    if (proxyIndex >= Github.proxies.length) {
-      const errorMsg = `All ${Github.proxies.length} proxies failed. Last errors: ${errors
-        .slice(-3)
-        .map(e => e.message)
-        .join('; ')}`;
-      bot.logger?.error(errorMsg);
-      return Promise.reject(new Error(errorMsg));
-    }
-
-    const proxy = Github.proxies[proxyIndex];
-    const url = `${proxy}${Github.GITHUB_API_BASE}${apiPath}`;
-    bot.logger?.debug(`Trying proxy: ${proxy}`);
-    bot.logger?.debug(`FULL URL: ${url}`);
-
-    return Github.axiosInstance
-      .get(url, { timeout: 10000 })
-      .then(response => {
-        bot.logger?.debug(`Successfully fetched from proxy: ${proxy}`);
-        return response.data as T;
-      })
-      .catch(error => {
-        const err = error as Error;
-        bot.logger?.warn(`Proxy ${proxy} failed: ${err.message}`);
-        errors.push(err);
-        // 递归尝试下一个代理
-        return Github.requestWithProxyFallback<T>(bot, apiPath, proxyIndex + 1, errors);
-      });
+  public static fetchGithubApi<T>(bot: QQBot, apiPath: string): Promise<T> {
+    return fetchGithubApi<T>(apiPath, bot.logger);
   }
 
   public constructor(bot: QQBot) {
@@ -224,12 +169,12 @@ export class Github {
     const pullApiPath = `/repos/${repository}/pulls/${number}`;
 
     return new Promise<void>((resolve, reject) => {
-      // 使用代理轮询获取 issue 数据
-      Github.requestWithProxyFallback<Issue & { pull_request?: unknown }>(bot, issueApiPath)
+      // 经 ghapi 反代获取 issue 数据
+      Github.fetchGithubApi<Issue & { pull_request?: unknown }>(bot, issueApiPath)
         .then(issueData => {
           if (issueData.pull_request) {
-            // 如果是 PR，使用代理轮询获取 PR 数据
-            Github.requestWithProxyFallback<PullRequest>(bot, pullApiPath)
+            // 如果是 PR，经 ghapi 反代获取 PR 数据
+            Github.fetchGithubApi<PullRequest>(bot, pullApiPath)
               .then(prData => {
                 GitHubImage.prHandler(prData, bot.logger)
                   .then(imageData => {

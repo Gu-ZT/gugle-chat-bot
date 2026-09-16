@@ -246,6 +246,31 @@ body {
     }
 }
 
+/* 列表行内的 issue/PR 引用：状态图标 + 标题 + 链接色编号（GitHub 风格） */
+.issue-ref {
+    display: inline;
+}
+
+.issue-ref-icon {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: -2px;
+    margin-right: 3px;
+}
+
+.issue-ref-title {
+    color: #0969da;
+    font-weight: 500;
+    text-decoration: none;
+}
+
+.issue-ref-number {
+    color: #0969da;
+    text-decoration: none;
+    margin-left: 3px;
+    white-space: nowrap;
+}
+
 p {
     margin: 0 0 1rem;
 }

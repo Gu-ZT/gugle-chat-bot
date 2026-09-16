@@ -1,7 +1,7 @@
 import { OpenedPullRequestEvent, PullRequest, PullRequestEvent, ReopenedPullRequestEvent, User } from '@/type/github';
 import { Logger } from 'winston';
 import { Template, tryGenerateImage } from '@/image';
-import { renderMarkdown } from '@/features/github/image';
+import { renderIssueBody } from '@/features/github/image';
 import dayjs from 'dayjs';
 
 function getRepositoryParts(repositoryUrl?: string, htmlUrl?: string): { owner: string; name: string } {
@@ -94,24 +94,30 @@ export function prHandler(pr: PullRequest, logger?: Logger, operation?: string, 
     headerExtra = `<div class="message">用户<div class="user">${sender.login}</div>${operation}了 </div>`;
   }
   return new Promise<string>((resolve, reject) => {
-    const template = Template.load('pull_request', 'src/features/github/template')
-      .arg('header extra', headerExtra || '')
-      .arg('repository owner', getRepositoryParts(pr.repository_url, pr.html_url).owner)
-      .arg('repository name', getRepositoryParts(pr.repository_url, pr.html_url).name)
-      .arg('pr number', pr.number)
-      .arg('pr title', pr.title)
-      .arg('pr body', renderMarkdown(pr.body))
-      .arg('pr labels', labelsHtml || 'No labels')
-      .arg('pr author', pr.user.login)
-      .arg('pr created at', dayjs(pr.created_at).format('YYYY-MM-DD HH:mm:ss'))
-      .arg('state label', getPullRequestState(pr))
-      .arg('extra', extra || '');
-    const templateFile = template.file();
-    template
-      .handler()
-      .then(pr => {
-        logger?.debug(`Start process pull request message...`);
-        tryGenerateImage(resolve, reject, pr, 820, templateFile);
+    const repository = getRepositoryParts(pr.repository_url, pr.html_url);
+    const repoFullName = `${repository.owner}/${repository.name}`;
+    renderIssueBody(pr.body, repoFullName, logger)
+      .then(bodyHtml => {
+        const template = Template.load('pull_request', 'src/features/github/template')
+          .arg('header extra', headerExtra || '')
+          .arg('repository owner', repository.owner)
+          .arg('repository name', repository.name)
+          .arg('pr number', pr.number)
+          .arg('pr title', pr.title)
+          .arg('pr body', bodyHtml)
+          .arg('pr labels', labelsHtml || 'No labels')
+          .arg('pr author', pr.user.login)
+          .arg('pr created at', dayjs(pr.created_at).format('YYYY-MM-DD HH:mm:ss'))
+          .arg('state label', getPullRequestState(pr))
+          .arg('extra', extra || '');
+        const templateFile = template.file();
+        template
+          .handler()
+          .then(pr => {
+            logger?.debug(`Start process pull request message...`);
+            tryGenerateImage(resolve, reject, pr, 820, templateFile);
+          })
+          .catch(reject);
       })
       .catch(reject);
   });

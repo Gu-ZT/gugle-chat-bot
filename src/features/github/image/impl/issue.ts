@@ -2,7 +2,7 @@ import { Issue, IssueEvent, OpenedIssueEvent, ReopenedIssueEvent, User } from '@
 import { Logger } from 'winston';
 import { Template, tryGenerateImage } from '@/image';
 import dayjs from 'dayjs';
-import { renderMarkdown } from '@/features/github/image';
+import { renderIssueBody } from '@/features/github/image';
 
 function getRepositoryParts(repositoryUrl?: string, htmlUrl?: string): { owner: string; name: string } {
   const url = repositoryUrl || htmlUrl;
@@ -75,24 +75,30 @@ export function issuesHandler(issue: Issue, logger?: Logger, operation?: string,
     headerExtra = `<div class="message">用户<div class="user">${sender.login}</div>${operation}了 </div>`;
   }
   return new Promise<string>((resolve, reject) => {
-    const template = Template.load('issue', 'src/features/github/template')
-      .arg('header extra', headerExtra || '')
-      .arg('repository owner', getRepositoryParts(issue.repository_url, issue.html_url).owner)
-      .arg('repository name', getRepositoryParts(issue.repository_url, issue.html_url).name)
-      .arg('issue number', issue.number)
-      .arg('state label', getIssueState(issue))
-      .arg('issue title', issue.title)
-      .arg('issue author', issue.user.login)
-      .arg('issue body', renderMarkdown(issue.body))
-      .arg('issue created at', dayjs(issue.created_at).format('YYYY-MM-DD HH:mm:ss'))
-      .arg('issue labels', labelsHtml || 'No labels')
-      .arg('extra', extra || '');
-    const templateFile = template.file();
-    template
-      .handler()
-      .then(issue => {
-        logger?.debug(`Start process issue message...`);
-        tryGenerateImage(resolve, reject, issue, 820, templateFile);
+    const repository = getRepositoryParts(issue.repository_url, issue.html_url);
+    const repoFullName = `${repository.owner}/${repository.name}`;
+    renderIssueBody(issue.body, repoFullName, logger)
+      .then(bodyHtml => {
+        const template = Template.load('issue', 'src/features/github/template')
+          .arg('header extra', headerExtra || '')
+          .arg('repository owner', repository.owner)
+          .arg('repository name', repository.name)
+          .arg('issue number', issue.number)
+          .arg('state label', getIssueState(issue))
+          .arg('issue title', issue.title)
+          .arg('issue author', issue.user.login)
+          .arg('issue body', bodyHtml)
+          .arg('issue created at', dayjs(issue.created_at).format('YYYY-MM-DD HH:mm:ss'))
+          .arg('issue labels', labelsHtml || 'No labels')
+          .arg('extra', extra || '');
+        const templateFile = template.file();
+        template
+          .handler()
+          .then(issue => {
+            logger?.debug(`Start process issue message...`);
+            tryGenerateImage(resolve, reject, issue, 820, templateFile);
+          })
+          .catch(reject);
       })
       .catch(reject);
   });

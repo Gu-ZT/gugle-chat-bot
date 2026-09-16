@@ -15,6 +15,150 @@ import hljs from 'highlight.js';
 import { full as emoji } from 'markdown-it-emoji';
 import { issuesClosed, issuesHandler, issuesOpened } from '@/features/github/image/impl/issue';
 import { prClosed, prHandler, prOpened } from '@/features/github/image/impl/pr';
+import { fetchIssueDetail, LinkedIssueDetail, LinkedIssueStatus } from '@/features/github/api';
+
+/**
+ * 解析 PR/Issue 正文列表行中的 issue/PR 引用（如 "- resolved #4851"、
+ * "- fixed owner/repo#4858"、自定义文字 "- 解决了 #4851"），
+ * 只替换其中的 "#编号" 部分为 GitHub 风格的行内引用：
+ * 状态图标 + 标题 + 链接色编号；行内其它文字原样保留。
+ *
+ * 与 GitHub 官方 markdown 渲染行为一致（列表保留、文字保留、#编号变链接），
+ * 只是额外把标题与状态图标一并渲染出来。非列表行中的 #编号 不处理。
+ */
+/** 匹配列表行（无序标记 -、*、+ 或有序标记 1. / 1) ） */
+const LIST_LINE = /^\s*(?:[-*+]|\d+[.)])\s+.*$/gm;
+/** 匹配行内的引用：#1234 或 owner/repo#1234（不匹配单词/路径中间） */
+const REF_IN_LINE = /(?<![\w/])((?:[\w.-]+\/[\w.-]+)?#\d+)(?!\w)/g;
+
+/** 占位符前缀/后缀：避开 markdown 特殊字符，渲染后再换回引用 HTML */
+const PLACEHOLDER_PREFIX = 'GHILINKISSUEPILLZ';
+const PLACEHOLDER_SUFFIX = 'ZLLIPISSUEKNILHG';
+
+interface LinkedIssueReference {
+  /** 完整仓库（owner/repo），短引用用当前仓库展开 */
+  repository: string;
+  /** issue 编号 */
+  number: number;
+  /** 查询失败时回退显示的文本（owner/repo#编号） */
+  label: string;
+  /** 是否跨仓库引用（显式写了 owner/repo#编号） */
+  crossRepo: boolean;
+}
+
+/** 转义标题中的 HTML 特殊字符，避免注入/破坏模板 */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** 按状态返回对应的 SVG 图标（GitHub octicon 原版：彩色圆环+同色图标，颜色与卡片状态标签一致） */
+function iconForStatus(status: LinkedIssueStatus): string {
+  switch (status) {
+    case 'open':
+      // issue 进行中：绿色圆环+绿点（issue-opened）
+      return `<svg class="issue-ref-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="#347d39"><path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"/><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"/></svg>`;
+    case 'completed':
+      // issue 已完成关闭：紫色圆环+紫色对勾（issue-closed）
+      return `<svg class="issue-ref-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="#8256d0"><path d="M11.28 6.78a.75.75 0 0 0-1.06-1.06L7.25 8.69 5.78 7.22a.75.75 0 0 0-1.06 1.06l2 2a.75.75 0 0 0 1.06 0l3.5-3.5Z"/><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0Zm-1.5 0a6.5 6.5 0 1 0-13 0 6.5 6.5 0 0 0 13 0Z"/></svg>`;
+    case 'not_planned':
+      // issue 未计划等关闭：灰色圆环+灰色斜杠（skip）
+      return `<svg class="issue-ref-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="#656c76"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm9.78-2.22-5.5 5.5a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734l5.5-5.5a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Z"/></svg>`;
+    case 'pr_open':
+      // PR 进行中：绿色 PR 图标（git-pull-request，原生无圆环）
+      return `<svg class="issue-ref-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="#347d39"><path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0Z"/></svg>`;
+    case 'pr_merged':
+      // PR 已合并：紫色合并图标（git-merge，原生无圆环）
+      return `<svg class="issue-ref-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="#8256d0"><path d="M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 0 1 0 0 .005V3.25Z"/></svg>`;
+    case 'pr_closed':
+      // PR 关闭未合并：红色 PR 关闭图标（git-pull-request-closed，原生无圆环）
+      return `<svg class="issue-ref-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="#cf222e"><path d="M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 5.5a.75.75 0 0 1 .75.75v3.378a2.251 2.251 0 1 1-1.5 0V7.25a.75.75 0 0 1 .75-.75Zm-2.03-5.273a.75.75 0 0 1 1.06 0l.97.97.97-.97a.748.748 0 0 1 1.265.332.75.75 0 0 1-.205.729l-.97.97.97.97a.75.75 0 0 1-1.06 1.061l-.97-.97-.97.97a.75.75 0 0 1-1.06-1.06l.97-.97-.97-.97a.75.75 0 0 1 0-1.06ZM2.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm0 9.5a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm9.5 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z"/></svg>`;
+    default:
+      // 状态未知（查询失败回退，通常不显示）：灰色圆环+问号
+      return `<svg class="issue-ref-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="#8b949e"><circle cx="8" cy="8" r="6.5" fill="none" stroke="#8b949e" stroke-width="1.5"/><text x="8" y="11" text-anchor="middle" font-size="9" font-family="sans-serif">?</text></svg>`;
+  }
+}
+
+/**
+ * 把单个引用渲染为 GitHub 风格的行内引用：
+ * 查到标题时显示「状态图标 + 标题 + 链接色编号」；查询失败时回退为纯链接色编号。
+ */
+function renderInlineRef(ref: LinkedIssueReference, detail: LinkedIssueDetail): string {
+  const numberLabel = ref.crossRepo ? `${ref.repository}#${ref.number}` : `#${ref.number}`;
+  const url = ref.repository ? `https://github.com/${ref.repository}/issues/${ref.number}` : '';
+  if (!detail.title) {
+    return `<a class="issue-ref-number" href="${url}">${numberLabel}</a>`;
+  }
+  return (
+    `<span class="issue-ref issue-ref-${detail.status}">${iconForStatus(detail.status)}` +
+    `<a class="issue-ref-title" href="${url}">${escapeHtml(detail.title)}</a>` +
+    `<a class="issue-ref-number" href="${url}">${numberLabel}</a></span>`
+  );
+}
+
+/** 占位符 -> 引用索引 */
+function placeholder(index: number): string {
+  return `${PLACEHOLDER_PREFIX}${index}${PLACEHOLDER_SUFFIX}`;
+}
+
+/**
+ * 从正文的列表行中提取 issue/PR 引用，替换为占位符（行内替换，保留其它文字）。
+ */
+function extractReferences(
+  body: string,
+  repository: string,
+  references: LinkedIssueReference[]
+): string {
+  const toRef = (reference: string): string => {
+    // reference 形如 "#4851" 或 "owner/repo#4851"
+    const hasRepo = reference.includes('/');
+    const repo = (hasRepo ? reference.split('#')[0] : repository) ?? '';
+    const numberText = reference.slice(reference.indexOf('#') + 1);
+    const number = Number.parseInt(numberText, 10);
+    if (!Number.isFinite(number)) return reference;
+    const label = repo ? `${repo}#${number}` : `#${number}`;
+    const index = references.length;
+    references.push({ repository: repo, number, label, crossRepo: hasRepo });
+    return placeholder(index);
+  };
+  // 只处理列表行；行内每个 #编号 独立替换为占位符，其余文字不动
+  return body.replace(LIST_LINE, line => line.replace(REF_IN_LINE, (m: string) => toRef(m)));
+}
+
+/**
+ * 渲染 PR/Issue 正文 markdown。列表行中的 "#编号" 引用替换为
+ * 随 issue/PR 状态变化的行内引用（图标 + 标题 + 链接色编号），
+ * 行内其它文字（resolved / fixed / 自定义文字）原样保留；
+ * 异步查询状态与标题，失败回退为纯链接色编号。
+ * @param body 原始 markdown 正文
+ * @param repository 当前仓库（owner/repo），用于展开 "#1234" 形式的短引用
+ * @param logger 可选日志器
+ */
+export async function renderIssueBody(body?: string, repository: string = '', logger?: Logger): Promise<any> {
+  const references: LinkedIssueReference[] = [];
+  const withPlaceholders = extractReferences(body || '', repository, references);
+  let html = renderMarkdown(withPlaceholders);
+
+  if (references.length === 0) {
+    return html;
+  }
+
+  // 并发查询所有引用的 issue 状态与标题；单个失败回退为 unknown（无标题），不阻塞其他
+  const details = await Promise.all(
+    references.map(ref => fetchIssueDetail(ref.repository, ref.number, logger))
+  );
+
+  // 占位符 -> 行内引用 HTML（列表结构与其余文字已由 markdown 渲染保留）
+  let replaced = html;
+  references.forEach((ref, i) => {
+    const refHtml = renderInlineRef(ref, details[i] ?? { status: 'unknown' });
+    replaced = replaced.split(placeholder(i)).join(refHtml);
+  });
+  return replaced;
+}
 
 export function renderMarkdown(body?: string): any {
   const taskLists = require('markdown-it-task-lists');
