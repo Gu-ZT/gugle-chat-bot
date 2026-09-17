@@ -115,7 +115,12 @@ ${wiki.url}`);
       : `订阅失败，请重试`;
     source.success(
       `${current}
-· 当前订阅该仓库的群：${subscribers.length > 0 ? subscribers.join('、') : '（无）'}`
+· 当前订阅该仓库的群：${subscribers.length > 0 ? subscribers.join('、') : '（无）'}
+· 若该仓库尚未配置 webhook，请在仓库页面 Settings → Webhooks → Add webhook 添加：
+  · Payload URL：https://hook.example.com
+  · Content type：application/json
+  · Secret：留空
+  · Which events would you like to trigger this webhook?：Send me everything.`
     );
   }
 
