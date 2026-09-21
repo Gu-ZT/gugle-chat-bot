@@ -9,6 +9,7 @@ import { botConfig } from '@/config';
 import { getGithubSubscribers, isGithubEnabledGroup } from '@/config/features';
 import { GitHubBindingManager } from '@/features/github/binding';
 import { fetchGithubApi } from '@/features/github/api';
+import { shouldPushRelease } from '@/features/github/image/impl/release';
 import axios, { AxiosInstance } from 'axios';
 
 export class Github {
@@ -92,15 +93,19 @@ export class Github {
 
   /**
    * 处理仓库发布 release 的 webhook 事件。
-   * 只在正式发布（published / released）时推送，避免草稿或编辑产生重复图片。
+   *
+   * GitHub 对同一次发布会投递多个 action（实测同一 release id 会在数秒内先后收到
+   * created + released、published + created + prereleased 等组合，且组合不固定），
+   * 因此按 action 过滤并不能避免重复，这里以 release id 在时间窗口内去重。
    */
   private listenReleaseEvent(bot: QQBot, msg: AllReleaseEvent) {
-    let promise: Promise<string> | undefined = undefined;
-    if (msg.action === 'published' || msg.action === 'released') {
-      promise = GitHubImage.releasePublished(msg, this.logger);
+    const decision = shouldPushRelease(msg);
+    if (!decision.push) {
+      this.logger?.debug(`Skip release event ${msg.release?.id} (${msg.action}): ${decision.reason}`);
+      return;
     }
     const repository = msg.repository.full_name;
-    this.sendGeneratedImage(bot, repository, 'release', promise);
+    this.sendGeneratedImage(bot, repository, 'release', GitHubImage.releasePublished(msg, this.logger));
   }
 
   /**

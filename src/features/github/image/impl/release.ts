@@ -120,3 +120,41 @@ export function releaseHandler(release: Release, repositoryFullName?: string, lo
 export function releasePublished(event: ReleaseEvent, logger?: Logger): Promise<string> {
   return releaseHandler(event.release, event.repository?.full_name, logger, event.sender);
 }
+
+/** 视为「发布」的 release action（其余如 edited / deleted / unpublished 不推送） */
+const RELEASE_PUBLISH_ACTIONS = new Set(['created', 'published', 'released', 'prereleased']);
+/** 同一次发布的多次投递会集中在数秒内到达，用该窗口折叠 */
+export const RELEASE_DEDUPE_WINDOW_MS = 60 * 1000;
+/** release id -> 最近一次推送时间 */
+const handledReleases = new Map<number, number>();
+
+/**
+ * 判断一个 release webhook 事件是否应当推送。
+ *
+ * GitHub 对同一次发布会投递多个 action（实测同一 release id 会在数秒内先后收到
+ * created + released、published + created + prereleased 等组合，且组合不固定），
+ * 因此不能只按 action 过滤：这里以 release id 在时间窗口内去重，保证一次发布只推一张。
+ * 同时跳过仍是草稿的 release（保存草稿同样会触发 created）。
+ *
+ * @param event release webhook 事件
+ * @param now 当前时间戳（便于验证）
+ * @returns 是否推送，以及跳过原因
+ */
+export function shouldPushRelease(event: ReleaseEvent, now: number = Date.now()): { push: boolean; reason: string } {
+  if (!RELEASE_PUBLISH_ACTIONS.has(event.action)) {
+    return { push: false, reason: `action ${event.action} 不属于发布` };
+  }
+  if (event.release.draft) {
+    return { push: false, reason: 'release 仍为草稿' };
+  }
+  const last = handledReleases.get(event.release.id);
+  if (last !== undefined && now - last < RELEASE_DEDUPE_WINDOW_MS) {
+    return { push: false, reason: `同一 release 已于 ${now - last}ms 前推送` };
+  }
+  // 清理窗口外的记录，避免长期运行后 Map 持续增长
+  for (const [id, timestamp] of handledReleases) {
+    if (now - timestamp >= RELEASE_DEDUPE_WINDOW_MS) handledReleases.delete(id);
+  }
+  handledReleases.set(event.release.id, now);
+  return { push: true, reason: '首次收到该 release 的发布事件' };
+}
