@@ -2,7 +2,7 @@ import { EventManager } from 'gugle-event';
 import { Logger } from 'winston';
 import http from 'node:http';
 import { QQBot } from '@/index';
-import { AllIssueEvent, AllPullRequestEvent, Issue, PullRequest } from '@/type/github';
+import { AllIssueEvent, AllPullRequestEvent, AllReleaseEvent, Issue, PullRequest } from '@/type/github';
 import { GroupMessageWSMSG, Message, SentMessage, TextMessage } from '@/type';
 import { GitHubImage } from '@/features/github/image';
 import { botConfig } from '@/config';
@@ -40,6 +40,7 @@ export class Github {
     this.eventManager = new EventManager();
     this.eventManager.listen('github-issues', this.listenIssueEvent.bind(this));
     this.eventManager.listen('github-pull_request', this.listenPullRequestEvent.bind(this));
+    this.eventManager.listen('github-release', this.listenReleaseEvent.bind(this));
     this.httpServer = http.createServer((req, res) => {
       if (req.method === 'POST') {
         let body = '';
@@ -87,6 +88,19 @@ export class Github {
     }
     const repository = msg.repository.full_name;
     this.sendGeneratedImage(bot, repository, 'pull request', promise);
+  }
+
+  /**
+   * 处理仓库发布 release 的 webhook 事件。
+   * 只在正式发布（published / released）时推送，避免草稿或编辑产生重复图片。
+   */
+  private listenReleaseEvent(bot: QQBot, msg: AllReleaseEvent) {
+    let promise: Promise<string> | undefined = undefined;
+    if (msg.action === 'published' || msg.action === 'released') {
+      promise = GitHubImage.releasePublished(msg, this.logger);
+    }
+    const repository = msg.repository.full_name;
+    this.sendGeneratedImage(bot, repository, 'release', promise);
   }
 
   /**

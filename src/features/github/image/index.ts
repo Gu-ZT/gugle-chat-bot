@@ -1,10 +1,12 @@
 import {
+  AllReleaseEvent,
   ClosedIssueEvent,
   ClosedPullRequestEvent,
   Issue,
   OpenedIssueEvent,
   OpenedPullRequestEvent,
   PullRequest,
+  Release,
   ReopenedIssueEvent,
   ReopenedPullRequestEvent,
   User
@@ -15,6 +17,7 @@ import hljs from 'highlight.js';
 import { full as emoji } from 'markdown-it-emoji';
 import { issuesClosed, issuesHandler, issuesOpened } from '@/features/github/image/impl/issue';
 import { prClosed, prHandler, prOpened } from '@/features/github/image/impl/pr';
+import { releaseHandler, releasePublished } from '@/features/github/image/impl/release';
 import { fetchIssueDetail, LinkedIssueDetail, LinkedIssueStatus } from '@/features/github/api';
 
 /**
@@ -235,5 +238,18 @@ export class GitHubImage {
 
   public static prClosed(pr: ClosedPullRequestEvent, logger?: Logger): Promise<string> {
     return prClosed(pr, logger);
+  }
+
+  public static releaseHandler(
+    release: Release,
+    repository?: string,
+    logger?: Logger,
+    sender?: User
+  ): Promise<string> {
+    return releaseHandler(release, repository, logger, sender);
+  }
+
+  public static releasePublished(event: AllReleaseEvent, logger?: Logger): Promise<string> {
+    return releasePublished(event, logger);
   }
 }

@@ -389,3 +389,58 @@ export type AllPullRequestEvent =
   | UnassignedPullRequestEvent
   | UnlabeledPullRequestEvent
   | UnlockedPullRequestEvent;
+
+/** release 上传的附件（如 jar 构建产物） */
+export interface ReleaseAsset {
+  id: number;
+  name: string;
+  label?: string | null;
+  content_type: string;
+  state: 'uploaded' | 'open' | string;
+  size: number;
+  download_count: number;
+  created_at: string;
+  updated_at: string;
+  browser_download_url: string;
+  uploader?: User;
+}
+
+export interface Release {
+  id: number;
+  tag_name: string;
+  target_commitish: string;
+  name: string | null;
+  body?: string | null;
+  draft: boolean;
+  prerelease: boolean;
+  created_at: string;
+  published_at: string | null;
+  html_url: string;
+  url: string;
+  tarball_url?: string | null;
+  zipball_url?: string | null;
+  author: User;
+  assets: ReleaseAsset[];
+}
+
+export type ReleaseEvent = {
+  action: 'published' | 'released' | 'created' | 'edited' | 'deleted' | 'prereleased' | 'unpublished';
+  release: Release;
+  repository: Repository;
+  sender: User;
+  organization?: Organization;
+};
+
+export type PublishedReleaseEvent = ReleaseEvent & {
+  action: 'published';
+};
+
+export type ReleasedReleaseEvent = ReleaseEvent & {
+  action: 'released';
+};
+
+export type PrereleasedReleaseEvent = ReleaseEvent & {
+  action: 'prereleased';
+};
+
+export type AllReleaseEvent = ReleaseEvent;
