@@ -4,15 +4,25 @@ import { Template, tryGenerateImage } from '@/image';
 import dayjs from 'dayjs';
 import { renderIssueBody } from '@/features/github/image';
 
-function getRepositoryParts(repositoryUrl?: string, htmlUrl?: string): { owner: string; name: string } {
-  const url = repositoryUrl || htmlUrl;
-  if (!url) return { owner: 'GitHub', name: '' };
-  const parts = url.split('/').filter(Boolean);
-  const githubIndex = parts.indexOf('github.com');
-  const repositoryParts = githubIndex >= 0 ? parts.slice(githubIndex + 1, githubIndex + 3) : parts.slice(-2);
-  return repositoryParts.length === 2
-    ? { owner: repositoryParts[0]!, name: repositoryParts[1]! }
-    : { owner: 'GitHub', name: '' };
+/**
+ * 解析仓库 owner/name。
+ * 优先使用 webhook 载荷中的 repository.full_name（最可靠），
+ * 其次从 html_url（https://github.com/owner/repo/releases/tag/x）解析。
+ * 注意：不能用 release.url——它是 API 地址
+ * (https://api.github.com/repos/owner/repo/releases/123)，末两段是 releases/123。
+ */
+function getRepositoryParts(repositoryFullName?: string, htmlUrl?: string): { owner: string; name: string } {
+  if (repositoryFullName) {
+    const parts = repositoryFullName.split('/').filter(Boolean);
+    if (parts.length === 2) return { owner: parts[0]!, name: parts[1]! };
+  }
+  if (htmlUrl) {
+    const parts = htmlUrl.split('/').filter(Boolean);
+    const githubIndex = parts.indexOf('github.com');
+    const repositoryParts = githubIndex >= 0 ? parts.slice(githubIndex + 1, githubIndex + 3) : [];
+    if (repositoryParts.length === 2) return { owner: repositoryParts[0]!, name: repositoryParts[1]! };
+  }
+  return { owner: 'GitHub', name: '' };
 }
 
 /** 格式化为 GitHub 风格的体积文本（如 23.8 MB） */
@@ -73,8 +83,8 @@ export function releaseHandler(release: Release, repositoryFullName?: string, lo
   if (sender) {
     headerExtra = `<div class="message">用户<div class="user">${sender.login}</div>发布了 </div>`;
   }
-  const repository = getRepositoryParts(release.url, release.html_url);
-  const repoFullName = repositoryFullName || `${repository.owner}/${repository.name}`;
+  const repository = getRepositoryParts(repositoryFullName, release.html_url);
+  const repoFullName = `${repository.owner}/${repository.name}`;
   // release 标题为空时回退为 tag 名
   const title = release.name || release.tag_name;
   return new Promise<string>((resolve, reject) => {

@@ -33,10 +33,17 @@ import { fetchIssueDetail, LinkedIssueDetail, LinkedIssueStatus } from '@/featur
 const LIST_LINE = /^\s*(?:[-*+]|\d+[.)])\s+.*$/gm;
 /** 匹配行内的引用：#1234 或 owner/repo#1234（不匹配单词/路径中间） */
 const REF_IN_LINE = /(?<![\w/])((?:[\w.-]+\/[\w.-]+)?#\d+)(?!\w)/g;
+/** 匹配 GitHub issue/PR 完整地址：https://github.com/owner/repo/(pull|issues)/1234 */
+const ISSUE_URL = /(?:https?:\/\/)?(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/(issues|pull)\/(\d+)/g;
+/** 代码段（围栏代码块或行内代码）：缩短 URL 时跳过，避免破坏代码内容 */
+const CODE_SEGMENT = /(```[\s\S]*?```|`[^`\n]*`)/g;
 
 /** 占位符前缀/后缀：避开 markdown 特殊字符，渲染后再换回引用 HTML */
 const PLACEHOLDER_PREFIX = 'GHILINKISSUEPILLZ';
 const PLACEHOLDER_SUFFIX = 'ZLLIPISSUEKNILHG';
+/** 纯链接（URL 缩短而来）的占位符，与引用分开编号避免冲突 */
+const LINK_PLACEHOLDER_PREFIX = 'GHILINKSHORTURLZ';
+const LINK_PLACEHOLDER_SUFFIX = 'ZLRUHTROHSKNILIHG';
 
 interface LinkedIssueReference {
   /** 完整仓库（owner/repo），短引用用当前仓库展开 */
@@ -47,6 +54,13 @@ interface LinkedIssueReference {
   label: string;
   /** 是否跨仓库引用（显式写了 owner/repo#编号） */
   crossRepo: boolean;
+}
+
+/** 由完整 GitHub 地址缩短而来的引用（只渲染为蓝色 #编号，不查询 API） */
+interface ShortUrl {
+  url: string;
+  number: number;
+  label: string;
 }
 
 /** 转义标题中的 HTML 特殊字符，避免注入/破坏模板 */
@@ -107,6 +121,38 @@ function placeholder(index: number): string {
   return `${PLACEHOLDER_PREFIX}${index}${PLACEHOLDER_SUFFIX}`;
 }
 
+/** 占位符 -> 缩短链接索引 */
+function linkPlaceholder(index: number): string {
+  return `${LINK_PLACEHOLDER_PREFIX}${index}${LINK_PLACEHOLDER_SUFFIX}`;
+}
+
+/**
+ * 把正文中的 issue/PR 完整地址缩短为 "#编号"（渲染后为蓝色链接）。
+ * 例如 https://github.com/owner/repo/pull/1234 -> #1234，
+ * 不处理 compare/commit 等其他 GitHub 地址，代码段内的 URL 也跳过。
+ * @param body 原始 markdown
+ * @param repository 当前仓库（owner/repo），同仓库时只显示 #编号
+ * @param links 收集缩短后的链接信息
+ */
+function shortenIssueUrls(body: string, repository: string, links: ShortUrl[]): string {
+  // 先按代码段切分，只处理非代码段，避免破坏代码块中的 URL
+  return body
+    .split(CODE_SEGMENT)
+    .map((segment, index) => {
+      // 奇数索引是捕获到的代码段，原样保留
+      if (index % 2 === 1) return segment;
+      return segment.replace(ISSUE_URL, (match, owner: string, repo: string, kind: string, number: string) => {
+        const fullName = `${owner}/${repo}`;
+        const url = `https://github.com/${fullName}/${kind}/${number}`;
+        const sameRepo = fullName.toLowerCase() === repository.toLowerCase();
+        const index = links.length;
+        links.push({ url, number: Number.parseInt(number, 10), label: sameRepo ? `#${number}` : `${fullName}#${number}` });
+        return linkPlaceholder(index);
+      });
+    })
+    .join('');
+}
+
 /**
  * 从正文的列表行中提取 issue/PR 引用，替换为占位符（行内替换，保留其它文字）。
  */
@@ -142,8 +188,17 @@ function extractReferences(
  */
 export async function renderIssueBody(body?: string, repository: string = '', logger?: Logger): Promise<any> {
   const references: LinkedIssueReference[] = [];
-  const withPlaceholders = extractReferences(body || '', repository, references);
+  const links: ShortUrl[] = [];
+  // 先把完整 issue/PR 地址缩短为占位符（不查 API），再处理 #编号 引用
+  const shortened = shortenIssueUrls(body || '', repository, links);
+  const withPlaceholders = extractReferences(shortened, repository, references);
   let html = renderMarkdown(withPlaceholders);
+
+  // 缩短链接 -> 蓝色 #编号（纯链接，不查询状态与标题）
+  links.forEach((link, i) => {
+    const shortHtml = `<a class="issue-ref-number" href="${link.url}">${link.label}</a>`;
+    html = html.split(linkPlaceholder(i)).join(shortHtml);
+  });
 
   if (references.length === 0) {
     return html;
