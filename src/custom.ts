@@ -15,6 +15,7 @@ import { Arguments, CommandManager, CommandSource } from 'gugle-command';
 import { MinecraftAPI } from '@/features/minecraft';
 import { ModrinthAPI } from '@/features/modrinth';
 import { getFeatureGroups, isValidRepositoryName, subscribeGithubRepository } from '@/config/features';
+import { addGithubAllowedOwner } from '@/config';
 import { checkReleasedVersion } from '@/features/version-tracker';
 import { Bili } from '@/features/bili';
 import { Management } from '@/features/management';
@@ -113,9 +114,21 @@ ${wiki.url}`);
     const current = subscribers.includes(source.msg.group_id)
       ? `已订阅仓库 ${repository} 的消息推送`
       : `订阅失败，请重试`;
+    // 管理员订阅时自动把该 owner 加入允许列表，无需手工改配置文件
+    const owner = repository.split('/')[0]!;
+    let allowedText: string;
+    if (source.hasPermission('admin')) {
+      const allowed = addGithubAllowedOwner(owner);
+      allowedText = allowed.added
+        ? `· 已自动将 ${owner} 加入允许访问的仓库列表`
+        : `· ${owner} 已在允许访问的仓库列表中`;
+    } else {
+      allowedText = `· 非管理员订阅不会自动添加允许列表，若无法访问该仓库请联系管理员`;
+    }
     source.success(
       `${current}
 · 当前订阅该仓库的群：${subscribers.length > 0 ? subscribers.join('、') : '（无）'}
+${allowedText}
 · 若该仓库尚未配置 webhook，请在仓库页面 Settings → Webhooks → Add webhook 添加：
   · Payload URL：https://hook.example.com
   · Content type：application/json
