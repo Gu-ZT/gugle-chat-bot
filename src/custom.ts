@@ -14,8 +14,14 @@ import { Poke } from '@/features/poke';
 import { Arguments, CommandManager, CommandSource } from 'gugle-command';
 import { MinecraftAPI } from '@/features/minecraft';
 import { ModrinthAPI } from '@/features/modrinth';
-import { getFeatureGroups, isValidRepositoryName, subscribeGithubRepository } from '@/config/features';
-import { addGithubAllowedOwner } from '@/config';
+import {
+  getFeatureGroups,
+  isOperator,
+  isValidRepositoryName,
+  isValidRepositoryOwner,
+  subscribeGithubRepository
+} from '@/config/features';
+import { addGithubAllowedRepository, isGithubAllowedPattern } from '@/config';
 import { checkReleasedVersion } from '@/features/version-tracker';
 import { Bili } from '@/features/bili';
 import { Management } from '@/features/management';
@@ -32,6 +38,7 @@ class CustomBot {
 · /wiki <query>：搜索 Minecraft 维基
 · /github bind <Username>：绑定 GitHub 用户名
 · /github subscribe <owner/repo>：订阅仓库消息推送
+· /github allow <owner|owner/repo>：授权仓库访问（管理员）
 · /pardon <QQ号>：把用户移出黑名单（管理员）
 · /pvtime：查询当前是梁文峰时间还是梁文谷时间`);
   }
@@ -113,7 +120,7 @@ ${wiki.url}`);
     // 与消息查询同一套判定：owner 已绑定 GitHub 账号，或命中允许列表配置
     let allowedText = '';
     if (!Github.isAllowedRepository(repository)) {
-      if (!source.hasPermission('admin')) {
+      if (!isOperator(source.msg.sender.user_id)) {
         source.fail(
           `仓库 ${repository} 不在允许访问的仓库列表中，无法订阅\n` +
             `如这是你自己的仓库，可先用 /github bind <用户名> 绑定 GitHub 账号，或联系管理员添加`
@@ -122,7 +129,7 @@ ${wiki.url}`);
       }
       // 管理员可自助开白：把该 owner 加入允许列表后继续订阅
       const owner = repository.split('/')[0]!;
-      addGithubAllowedOwner(owner);
+      addGithubAllowedRepository(owner);
       allowedText = `· 已自动将 ${owner} 加入允许访问的仓库列表\n`;
     }
     const subscribers = subscribeGithubRepository(repository, source.msg.group_id);
@@ -137,6 +144,40 @@ ${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings 
   · Content type：application/json
   · Secret：留空
   · Which events would you like to trigger this webhook?：Send me everything.`
+    );
+  }
+
+  /**
+   * /github allow <owner|owner/repo>：把 GitHub owner 或仓库加入允许访问列表（管理员）。
+   * 传入 owner 时授权其下全部仓库，传入 owner/repo 时只授权该仓库。
+   */
+  public static githubAllowCommand(source: CommandSource, target: string) {
+    if (!(source instanceof GroupMsgCommandSource)) {
+      source.fail('GitHub allow 仅支持在群聊中使用');
+      return;
+    }
+    if (!isOperator(source.msg.sender.user_id)) {
+      source.fail('该命令仅限管理员使用');
+      return;
+    }
+    const repositoryTarget = target.includes('/');
+    if (repositoryTarget ? !isValidRepositoryName(target) : !isValidRepositoryOwner(target)) {
+      source.fail(
+        `目标格式错误：${target}\n` +
+          `应为 owner（授权其下全部仓库，如 Anvil-Dev）或 owner/repo（仅授权该仓库，如 Anvil-Dev/AnvilCraft）`
+      );
+      return;
+    }
+    const existed = isGithubAllowedPattern(target);
+    const pattern = addGithubAllowedRepository(target);
+    if (existed) {
+      source.success(`${pattern} 已在允许访问的仓库列表中`);
+      return;
+    }
+    source.success(
+      repositoryTarget
+        ? `已将仓库 ${pattern} 加入允许访问的仓库列表`
+        : `已将 ${pattern} 加入允许访问的仓库列表，其下全部仓库均可访问`
     );
   }
 
@@ -263,6 +304,11 @@ ${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings 
         .then(
           CommandManager.literal('subscribe').then(
             CommandManager.argument('repository', Arguments.STRING).execute(CustomBot.githubSubscribeCommand)
+          )
+        )
+        .then(
+          CommandManager.literal('allow').then(
+            CommandManager.argument('target', Arguments.STRING).execute(CustomBot.githubAllowCommand)
           )
         )
     );

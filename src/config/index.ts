@@ -160,16 +160,25 @@ let loadedConfigPath: string = path.resolve(process.cwd(), 'configs', 'bot-confi
 export const botConfig = loadBotConfig();
 
 /**
- * 把一个 GitHub owner 加入允许访问的仓库列表（写入 owner/* 通配模式），并持久化到配置文件。
+ * 把一个 GitHub 仓库或 owner 加入允许访问的仓库列表，并持久化到配置文件。
  *
- * 动机：管理员通过 /github subscribe <owner/repo> 订阅未授权仓库时，无需手工改配置文件
- * 即可让该 owner 下的仓库（含后续新建的仓库）都能被访问。
+ * 动机：管理员通过 /github allow 或 /github subscribe 授权仓库时，无需手工改配置文件。
+ * 传入 owner 时写入 `owner/*`（覆盖该 owner 下全部仓库，含后续新建的）；
+ * 传入 owner/repo 时写入精确条目，只授权该仓库。
  *
- * @param owner GitHub 账号或组织名
+ * @param target GitHub owner（如 Anvil-Dev）或仓库全名（如 Anvil-Dev/AnvilCraft）
+ * @returns 实际写入的允许列表条目
  */
-export function addGithubAllowedOwner(owner: string): void {
-  const pattern = `${owner}/*`;
-  if (botConfig.githubAllowedRepositories.includes(pattern)) return;
+export function addGithubAllowedRepository(target: string): string {
+  const pattern = target.includes('/') ? target : `${target}/*`;
+  if (botConfig.githubAllowedRepositories.includes(pattern)) return pattern;
   botConfig.githubAllowedRepositories.push(pattern);
   writeConfigFile(loadedConfigPath, botConfig);
+  return pattern;
+}
+
+/** 判断某条目是否已在允许列表中（不做任何写入） */
+export function isGithubAllowedPattern(target: string): boolean {
+  const pattern = target.includes('/') ? target : `${target}/*`;
+  return botConfig.githubAllowedRepositories.includes(pattern);
 }

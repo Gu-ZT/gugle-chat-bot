@@ -330,6 +330,23 @@ export function isValidRepositoryName(repository: string): boolean {
   return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository);
 }
 
+/** GitHub owner 格式校验（字母数字 . _ -，不含斜杠） */
+export function isValidRepositoryOwner(owner: string): boolean {
+  return /^[A-Za-z0-9_.-]+$/.test(owner);
+}
+
+/**
+ * 判断某 QQ 用户是否为管理员（操作人白名单）。
+ *
+ * 白名单复用 management 功能的 operators 配置，使「谁是管理员」在全项目只有一个定义，
+ * 与 /pardon 等管理命令保持一致。
+ *
+ * @param qqUserId 发送者 QQ 号
+ */
+export function isOperator(qqUserId: number): boolean {
+  return getFeatureConfig('management').operators?.includes(qqUserId) ?? false;
+}
+
 // ---------------------------------------------------------------------------
 // 新人欢迎配置（v1：welcomes 数组）
 // ---------------------------------------------------------------------------
