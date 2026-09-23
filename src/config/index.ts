@@ -162,18 +162,14 @@ export const botConfig = loadBotConfig();
 /**
  * 把一个 GitHub owner 加入允许访问的仓库列表（写入 owner/* 通配模式），并持久化到配置文件。
  *
- * 动机：管理员通过 /github subscribe <owner/repo> 订阅仓库时，无需手工改配置文件即可
- * 让该 owner 下的仓库（含后续新建的仓库）都能被命令访问。
+ * 动机：管理员通过 /github subscribe <owner/repo> 订阅未授权仓库时，无需手工改配置文件
+ * 即可让该 owner 下的仓库（含后续新建的仓库）都能被访问。
  *
  * @param owner GitHub 账号或组织名
- * @returns added 表示本次是否新增（已存在则为 false），patterns 为写入后的完整列表
  */
-export function addGithubAllowedOwner(owner: string): { added: boolean; patterns: string[] } {
+export function addGithubAllowedOwner(owner: string): void {
   const pattern = `${owner}/*`;
-  if (botConfig.githubAllowedRepositories.includes(pattern)) {
-    return { added: false, patterns: botConfig.githubAllowedRepositories };
-  }
+  if (botConfig.githubAllowedRepositories.includes(pattern)) return;
   botConfig.githubAllowedRepositories.push(pattern);
   writeConfigFile(loadedConfigPath, botConfig);
-  return { added: true, patterns: botConfig.githubAllowedRepositories };
 }

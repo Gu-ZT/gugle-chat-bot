@@ -149,7 +149,11 @@ export class Github {
     });
   }
 
-  private static isAllowedRepository(repository: string): boolean {
+  /**
+   * 判断仓库是否允许被访问：owner 已绑定 GitHub 账号，或命中允许列表配置。
+   * 消息查询与订阅共用该判定，保证「能查」与「能订阅」口径一致。
+   */
+  public static isAllowedRepository(repository: string): boolean {
     const [owner] = repository.split('/');
     if (owner && GitHubBindingManager.isBoundUsername(owner)) return true;
 

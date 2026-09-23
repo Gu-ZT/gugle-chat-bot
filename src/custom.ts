@@ -110,26 +110,29 @@ ${wiki.url}`);
       source.fail(`仓库名格式错误：${repository}\n应为 owner/repo，例如 Anvil-Dev/AnvilCraft`);
       return;
     }
+    // 与消息查询同一套判定：owner 已绑定 GitHub 账号，或命中允许列表配置
+    let allowedText = '';
+    if (!Github.isAllowedRepository(repository)) {
+      if (!source.hasPermission('admin')) {
+        source.fail(
+          `仓库 ${repository} 不在允许访问的仓库列表中，无法订阅\n` +
+            `如这是你自己的仓库，可先用 /github bind <用户名> 绑定 GitHub 账号，或联系管理员添加`
+        );
+        return;
+      }
+      // 管理员可自助开白：把该 owner 加入允许列表后继续订阅
+      const owner = repository.split('/')[0]!;
+      addGithubAllowedOwner(owner);
+      allowedText = `· 已自动将 ${owner} 加入允许访问的仓库列表\n`;
+    }
     const subscribers = subscribeGithubRepository(repository, source.msg.group_id);
     const current = subscribers.includes(source.msg.group_id)
       ? `已订阅仓库 ${repository} 的消息推送`
       : `订阅失败，请重试`;
-    // 管理员订阅时自动把该 owner 加入允许列表，无需手工改配置文件
-    const owner = repository.split('/')[0]!;
-    let allowedText: string;
-    if (source.hasPermission('admin')) {
-      const allowed = addGithubAllowedOwner(owner);
-      allowedText = allowed.added
-        ? `· 已自动将 ${owner} 加入允许访问的仓库列表`
-        : `· ${owner} 已在允许访问的仓库列表中`;
-    } else {
-      allowedText = `· 非管理员订阅不会自动添加允许列表，若无法访问该仓库请联系管理员`;
-    }
     source.success(
       `${current}
 · 当前订阅该仓库的群：${subscribers.length > 0 ? subscribers.join('、') : '（无）'}
-${allowedText}
-· 若该仓库尚未配置 webhook，请在仓库页面 Settings → Webhooks → Add webhook 添加：
+${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings → Webhooks → Add webhook 添加：
   · Payload URL：https://hook.example.com
   · Content type：application/json
   · Secret：留空
