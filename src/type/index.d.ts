@@ -26,6 +26,8 @@ export interface ImageMessage {
   type: 'image';
   data: {
     file: string;
+    /** NapCat/OneBot 下发的可访问直链（接收消息时存在，转发用） */
+    url?: string;
   };
 }
 
@@ -47,6 +49,8 @@ export interface RecordMessage {
   type: 'record';
   data: {
     file: string;
+    /** NapCat/OneBot 下发的可访问直链（接收消息时存在，转发用） */
+    url?: string;
   };
 }
 
@@ -54,6 +58,8 @@ export interface VideoMessage {
   type: 'video';
   data: {
     file: string;
+    /** NapCat/OneBot 下发的可访问直链（接收消息时存在，转发用） */
+    url?: string;
   };
 }
 
@@ -96,6 +102,8 @@ export interface FileMessage {
   type: 'file';
   data: {
     file: string;
+    /** NapCat/OneBot 下发的可访问直链（接收消息时存在，转发用） */
+    url?: string;
   };
 }
 

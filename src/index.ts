@@ -300,31 +300,37 @@ export class QQBot {
   // API Methods
   // ------------------------------------------------
 
-  public sendPrivateMsg(userID: string | number, message: SentMessage) {
-    const bot = this;
-    this.operation(() => {
-      bot.axiosInstance
-        .post(`/send_private_msg`, {
-          user_id: userID,
-          message: message
-        })
-        .catch(error => {
-          bot.logger?.error(`Failed to send private message to ${userID}: ${error.message}`);
-        });
+  public sendPrivateMsg(userID: string | number, message: SentMessage): Promise<number | undefined> {
+    return new Promise(resolve => {
+      this.operation(() => {
+        this.axiosInstance
+          .post(`/send_private_msg`, {
+            user_id: userID,
+            message: message
+          })
+          .then(res => resolve(res?.data?.data?.message_id))
+          .catch(error => {
+            this.logger?.error(`Failed to send private message to ${userID}: ${error.message}`);
+            resolve(undefined);
+          });
+      });
     });
   }
 
-  public sendGroupMsg(groupId: string | number, message: SentMessage) {
-    const bot = this;
-    this.operation(() => {
-      bot.axiosInstance
-        .post(`/send_group_msg`, {
-          group_id: groupId,
-          message: message
-        })
-        .catch(error => {
-          bot.logger?.error(`Failed to send group message to ${groupId}: ${error.message}`);
-        });
+  public sendGroupMsg(groupId: string | number, message: SentMessage): Promise<number | undefined> {
+    return new Promise(resolve => {
+      this.operation(() => {
+        this.axiosInstance
+          .post(`/send_group_msg`, {
+            group_id: groupId,
+            message: message
+          })
+          .then(res => resolve(res?.data?.data?.message_id))
+          .catch(error => {
+            this.logger?.error(`Failed to send group message to ${groupId}: ${error.message}`);
+            resolve(undefined);
+          });
+      });
     });
   }
 

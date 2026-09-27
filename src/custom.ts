@@ -27,6 +27,7 @@ import { Bili } from '@/features/bili';
 import { Management } from '@/features/management';
 import { Welcome } from '@/features/welcome';
 import { PeakValleyTimer } from '@/features/peak-valley-timer';
+import { DiscordBridge } from '@/features/discord-bridge';
 
 class CustomBot {
   private static readonly peakValleyTimer: PeakValleyTimer = PeakValleyTimer.getInstance();
@@ -40,6 +41,7 @@ class CustomBot {
 · /github subscribe <owner/repo>：订阅仓库消息推送
 · /github allow <owner|owner/repo>：授权仓库访问（管理员）
 · /pardon <QQ号>：把用户移出黑名单（管理员）
+· /send <msg> [group|channel]：向互通的 Discord 频道/QQ 群发送消息（不填目标时发送到第一个互通条目的对端）
 · /pvtime：查询当前是梁文峰时间还是梁文谷时间`);
   }
 
@@ -259,6 +261,12 @@ ${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings 
       });
   }
 
+  @bot.subscribe('message-event-group', false)
+  public listenDiscordBridgeMsg(bot: QQBot, msg: GroupMessageWSMSG): void {
+    // QQ ⇄ Discord 互通：转发与 /send 分发（不依赖 command 白名单，内部自行门控）
+    DiscordBridge.getInstance().handleQQMessage(bot, msg);
+  }
+
   @bot.subscribe('notice-event-group-decrease', false)
   public listenGroupDecreaseNotice(bot: QQBot, msg: GroupDecreaseNoticeWSMSG): void {
     Management.handleGroupDecreaseNotice(bot, msg);
@@ -324,6 +332,7 @@ ${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings 
   @bot.subscribe('after-start', false)
   public startPeakValleyTimer(bot: QQBot): void {
     CustomBot.peakValleyTimer.start(bot);
+    DiscordBridge.getInstance().start(bot);
   }
 
   @bot.cron('0/30 * * * * *')
