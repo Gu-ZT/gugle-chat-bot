@@ -150,6 +150,8 @@ export class DiscordBridge {
   private readonly qqFromBridge = new BoundedCache<true>();
   /** 本桥转发到 Discord 的消息 id（回复链 & need_cmd 判定） */
   private readonly dcFromBridge = new BoundedCache<true>();
+  /** 转发到 QQ 的消息 id → 来源 bridge key（同群多频道时回复要回到原频道） */
+  private readonly bridgeByQQForward = new BoundedCache<string>();
 
   private constructor() {}
 
@@ -199,8 +201,9 @@ export class DiscordBridge {
   /** message-event-group 钩子：把 QQ 群消息转发到 Discord（或执行 /send） */
   public handleQQMessage(bot: QQBot, msg: GroupMessageWSMSG): void {
     try {
-      const bridge = this.resolveByGroup(msg.group_id);
-      if (!bridge) return;
+      // 同一 QQ 群可绑定多个频道：普通消息逐条门控并转发到所有放行的频道
+      const bridges = this.resolveAllByGroup(msg.group_id);
+      if (bridges.length === 0) return;
 
       // /send 命令（两个 need_cmd 状态都可用；与全局命令分发互斥，此处独立处理）
       // 仅拦截「/send + 空白/结尾」，/sendxxx 之类的消息仍按普通消息转发
@@ -215,18 +218,21 @@ export class DiscordBridge {
       }
 
       const replyId = this.extractQQReplyId(msg);
-      const isReplyToBridge = replyId !== undefined && this.qqFromBridge.get(replyId) === true;
+      // 「对桥消息的回复」需定位到该桥消息来自的频道（回复要回到原频道）
+      const replyBridge = replyId !== undefined ? this.bridgeByQQForward.get(replyId) : undefined;
+      const isReplyToBridge = replyBridge !== undefined;
 
-      // 门控：need_cmd / need_reply 任一开启时，仅放行「对桥消息的回复」
-      if (bridge.entry.need_cmd === 'true' || bridge.entry.need_reply === 'true') {
-        if (!isReplyToBridge) return;
+      for (const bridge of bridges) {
+        // 门控：need_cmd / need_reply 任一开启时，仅放行「对（该频道）桥消息的回复」
+        if (bridge.entry.need_cmd === 'true' || bridge.entry.need_reply === 'true') {
+          if (!isReplyToBridge || replyBridge !== bridge.key) continue;
+        }
+        this.forwardQQToDiscord(bot, msg, bridge, replyId).catch(error => {
+          bot.logger?.error(
+            `[DiscordBridge] QQ→Discord 转发失败: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`
+          );
+        });
       }
-
-      this.forwardQQToDiscord(bot, msg, bridge, replyId).catch(error => {
-        bot.logger?.error(
-          `[DiscordBridge] QQ→Discord 转发失败: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`
-        );
-      });
     } catch (error) {
       bot.logger?.error(
         `[DiscordBridge] QQ 消息处理异常: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`
@@ -398,6 +404,7 @@ export class DiscordBridge {
     const qqMessageId = await bot.sendGroupMsg(bridge.entry.group, segments);
     if (qqMessageId !== undefined) {
       this.registerQQMessage(qqMessageId, message.id, viaCommand);
+      this.bridgeByQQForward.set(qqMessageId, bridge.key);
       bot.logger?.debug(`[DiscordBridge] Discord→QQ：${bridge.key} → ${bridge.entry.group}（${qqMessageId}）`);
     }
   }
@@ -536,10 +543,13 @@ export class DiscordBridge {
     return { key, guildId, channelName, entry };
   }
 
-  private resolveByGroup(groupId: number | string): ResolvedBridge | undefined {
+  /** 该 QQ 群绑定的全部互通条目（同群可绑多个频道，普通消息逐条门控） */
+  private resolveAllByGroup(groupId: number | string): ResolvedBridge[] {
     const group = String(groupId);
-    const key = Object.keys(getDiscordBridgeConfig().bridges).find(item => getDiscordBridgeConfig().bridges[item]!.group === group);
-    return key ? this.resolveByKey(key) : undefined;
+    const bridges = getDiscordBridgeConfig().bridges;
+    return Object.keys(bridges)
+      .filter(key => bridges[key]!.group === group)
+      .map(key => this.resolveByKey(key)!);
   }
 
   private resolveByChannel(guildId: string, channelName: string): ResolvedBridge | undefined {
