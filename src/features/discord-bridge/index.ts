@@ -153,6 +153,12 @@ export class DiscordBridge {
 
   private constructor() {}
 
+  /** 该群是否配置了互通条目（QQ 侧 /send 分发与桥接共用同一判定） */
+  public static isSendTargetGroup(groupId: number | string): boolean {
+    const group = String(groupId);
+    return Object.values(getDiscordBridgeConfig().bridges).some(entry => entry.group === group);
+  }
+
   /** after-start 钩子：启动 Discord 客户端（token 为空时禁用本功能） */
   public start(bot: QQBot): void {
     if (this.started) return;
@@ -197,8 +203,9 @@ export class DiscordBridge {
       if (!bridge) return;
 
       // /send 命令（两个 need_cmd 状态都可用；与全局命令分发互斥，此处独立处理）
+      // 仅拦截「/send + 空白/结尾」，/sendxxx 之类的消息仍按普通消息转发
       const raw = msg.raw_message ?? '';
-      if (raw.startsWith(SEND_COMMAND_PREFIX)) {
+      if (this.isSendCommand(raw)) {
         this.handleSendFromQQ(bot, msg, raw).catch(error => {
           bot.logger?.error(
             `[DiscordBridge] QQ /send 执行失败: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`
@@ -313,7 +320,7 @@ export class DiscordBridge {
     if (!bridge) return;
 
     const raw = message.content ?? '';
-    if (raw.trim().startsWith(SEND_COMMAND_PREFIX)) {
+    if (this.isSendCommand(raw)) {
       await this.handleSendFromDiscord(message, raw);
       return;
     }
@@ -415,6 +422,11 @@ export class DiscordBridge {
   // -------------------------------------------------------------------------
   // /send <msg> [group|channel]
   // -------------------------------------------------------------------------
+
+  /** 判断文本是否为 /send 命令（/send 后必须为空白或结尾，避免误吞 /sendxxx 消息） */
+  private isSendCommand(raw: string): boolean {
+    return raw.startsWith(SEND_COMMAND_PREFIX) && (raw.length === SEND_COMMAND_PREFIX.length || /\s/.test(raw[SEND_COMMAND_PREFIX.length]!));
+  }
 
   /**
    * 解析 /send 参数：尾部 token 命中某个 bridge 的 QQ 群号或频道 key

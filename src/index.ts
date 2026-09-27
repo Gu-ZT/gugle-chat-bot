@@ -244,6 +244,26 @@ export class QQBot {
     if (!getFeatureGroups('command').includes(msg.group_id)) return;
     const command = msg.raw_message;
     if (!command.startsWith('/')) return;
+    // 互通桥接的 /send 由 DiscordBridge 自行处理，不走命令分发
+    // （否则 gugle-command 找不到 send 节点会回发 Invalid command）
+    if (command.startsWith('/send')) {
+      void import('@/features/discord-bridge')
+        .then(module => {
+          // /send 后必须是空白或结尾，/sendxxx 仍交给命令分发
+          const rest = command.slice('/send'.length);
+          if (rest && !/^\s/.test(rest)) {
+            bot.commandManager.execute(new GroupMsgCommandSource(bot, msg), command);
+            return;
+          }
+          if (!module.DiscordBridge.isSendTargetGroup(msg.group_id)) {
+            bot.commandManager.execute(new GroupMsgCommandSource(bot, msg), command);
+          }
+        })
+        .catch(e => {
+          bot.logger?.error(`DiscordBridge /send dispatch failed: ${e?.message ?? e}`);
+        });
+      return;
+    }
     bot.commandManager.execute(new GroupMsgCommandSource(bot, msg), command);
   }
 
