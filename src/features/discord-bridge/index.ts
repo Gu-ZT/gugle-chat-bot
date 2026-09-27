@@ -280,13 +280,14 @@ export class DiscordBridge {
     return parts.join('').trim();
   }
 
-  /** QQ→Discord 转发主流程 */
+  /** QQ→Discord 转发主流程；bodyOverride 用于 /send（剥离命令前缀后的正文） */
   private async forwardQQToDiscord(
     bot: QQBot,
     msg: GroupMessageWSMSG,
     bridge: ResolvedBridge,
     replyId?: number,
-    viaCommand: boolean = false
+    viaCommand: boolean = false,
+    bodyOverride?: string
   ): Promise<void> {
     if (!this.client) return;
     const channel = await this.resolveDiscordChannel(bridge);
@@ -294,7 +295,7 @@ export class DiscordBridge {
 
     const senderName = msg.sender.card || msg.sender.nickname;
     const header = `【${msg.group_name}|${msg.group_id}】${senderName}(${msg.sender.user_id})：`;
-    const body = this.buildDiscordTextFromQQ(msg);
+    const body = bodyOverride ?? this.buildDiscordTextFromQQ(msg);
     if (!body) return;
 
     // QQ 消息符合 Discord markdown → 原文发送（Discord 原生渲染）；否则转义为 plain text
@@ -341,12 +342,13 @@ export class DiscordBridge {
     await this.forwardDiscordToQQ(message, bridge, referenceId);
   }
 
-  /** Discord→QQ 转发主流程 */
+  /** Discord→QQ 转发主流程；contentOverride 用于 /send（剥离命令前缀后的正文） */
   private async forwardDiscordToQQ(
     message: DiscordMessage,
     bridge: ResolvedBridge,
     referenceId?: string | null,
-    viaCommand: boolean = false
+    viaCommand: boolean = false,
+    contentOverride?: string
   ): Promise<void> {
     if (!this.bot) return;
     const bot = this.bot;
@@ -355,7 +357,7 @@ export class DiscordBridge {
     const authorName = message.member?.displayName ?? message.author.username;
     const header = `【${guildName}|${channel.name}】${authorName}(${message.author.username})：`;
 
-    const content = message.content ?? '';
+    const content = contentOverride ?? message.content ?? '';
     const segments: Message[] = [];
 
     // 回复链：转发到 QQ 时带 reply 引用
@@ -375,10 +377,10 @@ export class DiscordBridge {
           bot.logger?.error(
             `[DiscordBridge] markdown 渲染失败，降级纯文本: ${error instanceof Error ? error.message : String(error)}`
           );
-          segments.push({ type: 'text', data: { text: `${header}\n${this.plainDiscordContent(message)}` } });
+          segments.push({ type: 'text', data: { text: `${header}\n${this.plainDiscordContent(message, content)}` } });
         }
       } else {
-        segments.push({ type: 'text', data: { text: `${header}\n${this.plainDiscordContent(message)}` } });
+        segments.push({ type: 'text', data: { text: `${header}\n${this.plainDiscordContent(message, content)}` } });
       }
     } else if (segments.length === 0 || message.attachments.size > 0) {
       // 无文字但有附件/纯 embed：补头部行
@@ -409,9 +411,9 @@ export class DiscordBridge {
     }
   }
 
-  /** Discord 消息正文纯文本化（提及/频道/表情 → 可读文本） */
-  private plainDiscordContent(message: DiscordMessage): string {
-    let text = message.content;
+  /** Discord 消息正文纯文本化（提及/频道/表情 → 可读文本）；contentOverride 用于 /send 剥离前缀后的正文 */
+  private plainDiscordContent(message: DiscordMessage, contentOverride?: string): string {
+    let text = contentOverride ?? message.content;
     text = text.replace(/<@!?(\d+)>/g, (_match, id: string) => {
       const name = message.mentions.members?.get(id)?.displayName ?? message.mentions.users.get(id)?.username;
       return `@${name ?? id}`;
@@ -481,7 +483,7 @@ export class DiscordBridge {
     }
     const bridge = this.resolveByKey(targetKey);
     if (!bridge) return;
-    await this.forwardQQToDiscord(bot, msg, bridge, undefined, true);
+    await this.forwardQQToDiscord(bot, msg, bridge, undefined, true, parsed.message);
   }
 
   /** Discord 侧 /send：发送到目标 QQ 群（或目标 Discord 频道） */
@@ -499,7 +501,7 @@ export class DiscordBridge {
     const bridge = this.resolveByKey(targetKey);
     if (!bridge) return;
     // 来源频道即目标频道时按普通消息处理，避免同频道复读
-    await this.forwardDiscordToQQ(message, bridge, null, true);
+    await this.forwardDiscordToQQ(message, bridge, null, true, parsed.message);
   }
 
   // -------------------------------------------------------------------------
