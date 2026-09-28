@@ -249,27 +249,40 @@ export class DiscordBridge {
     return Number.isSafeInteger(id) ? id : undefined;
   }
 
-  /** QQ 消息段 → Discord 文本（含直链附件行） */
-  private buildDiscordTextFromQQ(msg: GroupMessageWSMSG): string {
-    const parts: string[] = [];
+  /** QQ 消息段拆分：文本/附件分离（附件以 Discord 附件上传，文本不混入 URL） */
+  private splitQQMessage(msg: GroupMessageWSMSG): { text: string; attachments: { url: string; name: string }[] } {
+    const textParts: string[] = [];
+    const attachments: { url: string; name: string }[] = [];
     if (Array.isArray(msg.message)) {
       for (const segment of msg.message) {
         switch (segment.type) {
           case 'text':
-            parts.push(segment.data.text);
+            textParts.push(segment.data.text);
             break;
           case 'at':
-            parts.push(`@${segment.data.qq}`);
+            textParts.push(`@${segment.data.qq}`);
             break;
           case 'face':
-            parts.push('[表情]');
+            textParts.push('[表情]');
             break;
           case 'image':
           case 'record':
           case 'video':
           case 'file': {
             const url = segment.data.url || segment.data.file;
-            if (url && /^https?:\/\//.test(url)) parts.push(url);
+            if (url && /^https?:\/\//.test(url)) {
+              // 文件名取 url 最后一段（去掉查询串），缺省按类型命名
+              const nameFromUrl = url.split('?')[0]!.split('/').pop();
+              const fallback =
+                segment.type === 'image'
+                  ? 'image.png'
+                  : segment.type === 'record'
+                    ? 'audio.amr'
+                    : segment.type === 'video'
+                      ? 'video.mp4'
+                      : 'file';
+              attachments.push({ url, name: nameFromUrl || fallback });
+            }
             break;
           }
           default:
@@ -277,7 +290,7 @@ export class DiscordBridge {
         }
       }
     }
-    return parts.join('').trim();
+    return { text: textParts.join('').trim(), attachments };
   }
 
   /** QQ→Discord 转发主流程；bodyOverride 用于 /send（剥离命令前缀后的正文） */
@@ -295,18 +308,22 @@ export class DiscordBridge {
 
     const senderName = msg.sender.card || msg.sender.nickname;
     const header = `【${msg.group_name}|${msg.group_id}】${senderName}(${msg.sender.user_id})：`;
-    const body = bodyOverride ?? this.buildDiscordTextFromQQ(msg);
-    if (!body) return;
+    const { text, attachments } =
+      bodyOverride !== undefined ? { text: bodyOverride, attachments: [] as { url: string; name: string }[] } : this.splitQQMessage(msg);
+    if (!text && attachments.length === 0) return;
 
     // QQ 消息符合 Discord markdown → 原文发送（Discord 原生渲染）；否则转义为 plain text
-    const rendered = isDiscordMarkdown(body) ? body : escapeDiscord(body);
-    const content = this.truncateDiscord(`${header}\n${rendered}`);
+    // 注意：仅在文本非空时拼接换行，避免纯图片消息出现孤立的来源行
+    const rendered = isDiscordMarkdown(text) ? text : escapeDiscord(text);
+    const content = this.truncateDiscord(text ? `${header}\n${rendered}` : header);
 
     const referenceId = replyId !== undefined ? this.discordByQQ.get(replyId) : undefined;
     const sent = await channel.send({
       content,
       ...(referenceId ? { reply: { messageReference: referenceId } } : {}),
-      allowedMentions: { parse: [], repliedUser: false }
+      allowedMentions: { parse: [], repliedUser: false },
+      // 图片/语音/视频/文件以附件上传，Discord 内嵌展示而非裸链接
+      files: attachments.map(item => ({ attachment: item.url, name: item.name }))
     });
     this.registerDiscordMessage(sent.id, msg.message_id, viaCommand);
     bot.logger?.debug(`[DiscordBridge] QQ→Discord：${msg.group_id} → ${bridge.key}（${sent.id}）`);
