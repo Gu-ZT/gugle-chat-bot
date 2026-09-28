@@ -271,8 +271,6 @@ export class DiscordBridge {
           case 'file': {
             const url = segment.data.url || segment.data.file;
             if (url && /^https?:\/\//.test(url)) {
-              // 文件名取 url 最后一段（去掉查询串），缺省按类型命名
-              const nameFromUrl = url.split('?')[0]!.split('/').pop();
               const fallback =
                 segment.type === 'image'
                   ? 'image.png'
@@ -281,7 +279,7 @@ export class DiscordBridge {
                     : segment.type === 'video'
                       ? 'video.mp4'
                       : 'file';
-              attachments.push({ url, name: nameFromUrl || fallback });
+              attachments.push({ url, name: fallback });
             }
             break;
           }
@@ -291,6 +289,45 @@ export class DiscordBridge {
       }
     }
     return { text: textParts.join('').trim(), attachments };
+  }
+
+  /** 按字节内容识别常见图片格式，返回对应扩展名（识别不了返回 null） */
+  private detectImageExt(buf: Buffer): string | null {
+    if (buf.length < 12) return null;
+    if (buf[0] === 0xff && buf[1] === 0xd8) return 'jpg';
+    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'png';
+    if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'gif';
+    if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 && buf.toString('ascii', 8, 12) === 'WEBP')
+      return 'webp';
+    if (buf[0] === 0x42 && buf[1] === 0x4d) return 'bmp';
+    return null;
+  }
+
+  /**
+   * 下载附件为 Buffer 并修正扩展名。
+   * NapCat 多媒体直链带 rkey 防盗链，由 bot 侧下载再上传比让 Discord 服务器抓取更可靠；
+   * 文件名必须带真实图片扩展名，Discord 才会内嵌渲染而不是显示为附件卡片。
+   */
+  private async fetchAttachment(
+    bot: QQBot,
+    item: { url: string; name: string }
+  ): Promise<{ attachment: Buffer; name: string } | undefined> {
+    try {
+      const res = await bot.axiosInstance.get<ArrayBuffer>(item.url, { responseType: 'arraybuffer', timeout: 30000 });
+      const buf = Buffer.from(res.data);
+      const ext = this.detectImageExt(buf);
+      let name = item.name;
+      if (ext) {
+        // 图片：确保扩展名与真实格式一致（URL 里常是 download?fileid=... 没有扩展名）
+        name = name.replace(/\.[a-z0-9]+$/i, '') + '.' + ext;
+      }
+      return { attachment: buf, name };
+    } catch (error) {
+      bot.logger?.error(
+        `[DiscordBridge] 附件下载失败（${item.url.slice(0, 80)}…）: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return undefined;
+    }
   }
 
   /** QQ→Discord 转发主流程；bodyOverride 用于 /send（剥离命令前缀后的正文） */
@@ -318,12 +355,16 @@ export class DiscordBridge {
     const content = this.truncateDiscord(text ? `${header}\n${rendered}` : header);
 
     const referenceId = replyId !== undefined ? this.discordByQQ.get(replyId) : undefined;
+    // 附件由 bot 下载为 Buffer 上传（避免 Discord 服务器抓取 NapCat 防盗链直链失败/拿到非图片响应），
+    // 并按字节内容修正扩展名，保证图片在 Discord 内嵌渲染
+    const files = (
+      await Promise.all(attachments.map(item => this.fetchAttachment(bot, item)))
+    ).filter((item): item is { attachment: Buffer; name: string } => item !== undefined);
     const sent = await channel.send({
       content,
       ...(referenceId ? { reply: { messageReference: referenceId } } : {}),
       allowedMentions: { parse: [], repliedUser: false },
-      // 图片/语音/视频/文件以附件上传，Discord 内嵌展示而非裸链接
-      files: attachments.map(item => ({ attachment: item.url, name: item.name }))
+      files
     });
     this.registerDiscordMessage(sent.id, msg.message_id, viaCommand);
     bot.logger?.debug(`[DiscordBridge] QQ→Discord：${msg.group_id} → ${bridge.key}（${sent.id}）`);
