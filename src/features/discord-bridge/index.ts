@@ -1,8 +1,11 @@
 import { ChannelType, Client, GatewayIntentBits, Guild, Message as DiscordMessage, TextChannel } from 'discord.js';
-import { QQBot } from '@/index';
-import { GroupMessageWSMSG, Message } from '@/type';
+import { GroupMessageSentEvent, QQBot } from '@/index';
+import { GroupMessageWSMSG, Message, SentMessage } from '@/type';
 import { ConfigStore } from '@/config/manager';
 import { escapeDiscord, isDiscordMarkdown, renderDiscordMessageToImage } from '@/features/discord-bridge/markdown';
+import { DiscordMsgCommandSource } from '@/features/discord-bridge/source';
+import { normalizeCommandText } from '@/command';
+import { Github } from '@/features/github';
 
 /**
  * QQ 群 ⇄ Discord 频道互通模块。
@@ -27,6 +30,14 @@ import { escapeDiscord, isDiscordMarkdown, renderDiscordMessageToImage } from '@
  * - `need_cmd=true`：双向普通消息均不转发，仅 `/send <msg> [group|channel]` 与
  *   「回复桥消息」互通（回复会以回复形式回传到对侧）；
  * - `/send` 不填目标时默认发送到配置文件中第一个互通条目的对端。
+ *
+ * 附加能力：
+ * - 机器人自身发出的 QQ 群消息（GitHub 通知、命令回复等）无条件转发到该群绑定的
+ *   所有频道（经 QQBot.onGroupMessageSent 钩子，fromBridge 标记防止回环）；
+ * - Discord 频道中可直接使用全部已注册命令（/ 或 ! 前缀），回复发在 Discord 频道；
+ *   未注册命令的 /xxx 文本按普通消息转发，不会回发 Invalid command；
+ * - Discord 消息中的 `#编号` / `owner/repo#编号` 会查询 GitHub Issue/PR 并以图片卡片
+ *   回复在 Discord 频道（一条消息多个编号全部解析，与 QQ 侧同一套渲染）。
  *
  * 前置条件：Discord 开发者后台为 bot 开启 Message Content Intent，并邀请入对应服务器。
  */
@@ -166,6 +177,15 @@ export class DiscordBridge {
     if (this.started) return;
     this.started = true;
     this.bot = bot;
+    // 机器人自身发出的群消息（GitHub 通知、命令回复等）也转发到 Discord。
+    // 注意：OneBot 不会把 bot 自己的消息回推为 message 事件，只能挂发送出口钩子。
+    bot.onGroupMessageSent(event => {
+      this.handleQQOutgoingMessage(event).catch(error => {
+        bot.logger?.error(
+          `[DiscordBridge] 机器人消息转发失败: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`
+        );
+      });
+    });
     const token = getDiscordBridgeConfig().token;
     if (!token) {
       bot.logger?.warn('[DiscordBridge] token 未配置（configs/features/discord-bridge.json），互通功能已禁用');
@@ -370,6 +390,117 @@ export class DiscordBridge {
     bot.logger?.debug(`[DiscordBridge] QQ→Discord：${msg.group_id} → ${bridge.key}（${sent.id}）`);
   }
 
+  /**
+   * 机器人自身发出的群消息 → Discord（GitHub 通知、命令回复等）。
+   *
+   * 由 QQBot.onGroupMessageSent 钩子驱动（OneBot 不回推 bot 自己的 message 事件）。
+   * 机器人消息无条件转发到该群绑定的所有频道——need_cmd / need_reply 门控只针对
+   * 普通用户消息，否则 GitHub 通知等机器人消息永远到不了 Discord。
+   */
+  private async handleQQOutgoingMessage(event: GroupMessageSentEvent): Promise<void> {
+    // 桥自身转发到 QQ 的消息必须跳过，否则「Discord→QQ→Discord」形成回环
+    if (event.fromBridge) return;
+    // 发送失败（无 messageId）说明消息根本没发出去，无需转发
+    if (event.messageId === undefined) return;
+    if (!this.client || !this.bot) return;
+    const bot = this.bot;
+
+    const bridges = this.resolveAllByGroup(event.groupId);
+    if (bridges.length === 0) return;
+
+    const loginInfo = bot.getLoginInfoSync();
+    const senderName = loginInfo?.nickname ?? 'QQ Bot';
+    const senderId = loginInfo?.user_id ?? 'unknown';
+    const header = `【QQ群 ${event.groupId}】${senderName}(${senderId})：`;
+
+    // 拆分发送载荷：文本 / 附件（base64 或直链）/ 回复引用
+    const textParts: string[] = [];
+    const downloads: { url: string; name: string }[] = [];
+    const files: { attachment: Buffer; name: string }[] = [];
+    let replyQQId: number | undefined;
+    for (const segment of event.message) {
+      if (segment.type === 'node') continue;
+      switch (segment.type) {
+        case 'text':
+          textParts.push(segment.data.text);
+          break;
+        case 'at':
+          textParts.push(`@${segment.data.qq}`);
+          break;
+        case 'face':
+          textParts.push('[表情]');
+          break;
+        case 'reply': {
+          const id = Number(segment.data.id);
+          if (Number.isSafeInteger(id)) replyQQId = id;
+          break;
+        }
+        case 'image':
+        case 'record':
+        case 'video':
+        case 'file': {
+          const fallback =
+            segment.type === 'image'
+              ? 'image.png'
+              : segment.type === 'record'
+                ? 'audio.amr'
+                : segment.type === 'video'
+                  ? 'video.mp4'
+                  : 'file';
+          // bot 发送的图片多为 base64 载荷（GitHub 卡片、markdown 渲染图），直接解码为附件
+          const base64 = this.extractBase64Payload(segment.data.file);
+          if (base64) {
+            files.push({ attachment: Buffer.from(base64, 'base64'), name: fallback });
+            break;
+          }
+          const url = segment.data.url || segment.data.file;
+          if (url && /^https?:\/\//.test(url)) downloads.push({ url, name: fallback });
+          break;
+        }
+        default:
+          break;
+      }
+    }
+    for (const item of downloads) {
+      const fetched = await this.fetchAttachment(bot, item);
+      if (fetched) files.push(fetched);
+    }
+
+    const text = textParts.join('').trim();
+    if (!text && files.length === 0) return;
+
+    const rendered = isDiscordMarkdown(text) ? text : escapeDiscord(text);
+    const content = this.truncateDiscord(text ? `${header}\n${rendered}` : header);
+    const referenceId = replyQQId !== undefined ? this.discordByQQ.get(replyQQId) : undefined;
+
+    for (const bridge of bridges) {
+      const channel = await this.resolveDiscordChannel(bridge);
+      if (!channel) continue;
+      try {
+        const sent = await channel.send({
+          content,
+          ...(referenceId ? { reply: { messageReference: referenceId } } : {}),
+          allowedMentions: { parse: [], repliedUser: false },
+          files
+        });
+        // 登记映射：Discord 用户回复机器人消息时可按回复链回传到 QQ
+        this.registerDiscordMessage(sent.id, event.messageId);
+        bot.logger?.debug(`[DiscordBridge] 机器人消息→Discord：${event.groupId} → ${bridge.key}（${sent.id}）`);
+      } catch (error) {
+        bot.logger?.error(
+          `[DiscordBridge] 机器人消息转发失败（${bridge.key}）: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+  }
+
+  /** 从 OneBot 文件字段提取 base64 载荷（`base64://…` 或 `data:image/…;base64,…`），非 base64 返回 undefined */
+  private extractBase64Payload(file: string): string | undefined {
+    if (file.startsWith('base64://')) return file.slice('base64://'.length).trim();
+    const match = /^data:image\/[a-z0-9.+-]+;base64,\s*(.+)$/i.exec(file);
+    return match?.[1]?.trim();
+  }
+
   // -------------------------------------------------------------------------
   // Discord → QQ
   // -------------------------------------------------------------------------
@@ -390,14 +521,92 @@ export class DiscordBridge {
       return;
     }
 
+    // 命令分发：/ 或 ! 前缀且首段命中已注册命令时，在 Discord 侧直接执行并把回复发在
+    // Discord 频道；命令消息本身不再转发到 QQ。未命中注册的 /xxx 文本按普通消息继续走
+    // 转发流程（避免回发 Invalid command 刷屏）
+    if (await this.handleDiscordCommand(message, bridge, raw)) return;
+
     const referenceId = message.reference?.messageId;
     const referenceKey = referenceId ? this.snowflakeToKey(referenceId) : undefined;
     const isReplyToBridge = referenceKey !== undefined && this.dcFromBridge.get(referenceKey) === true;
+
+    // Discord 侧 #编号 查询 GitHub Issue/PR（与 QQ 侧共用同一套解析/渲染，回复发在 Discord
+    // 频道）；不受 need_cmd 门控影响，消息本身仍按门控决定是否转发到 QQ
+    if (this.bot) {
+      const groupId = Number(bridge.entry.group);
+      const results = await Github.processDiscordMessage(
+        this.bot,
+        raw,
+        Number.isSafeInteger(groupId) ? groupId : undefined
+      );
+      for (const result of results) {
+        await this.sendGithubResultToDiscord(message, result);
+      }
+    }
 
     // 门控：need_cmd 开启时仅放行「对桥消息的回复」（need_reply 不限制此方向）
     if (bridge.entry.need_cmd === 'true' && !isReplyToBridge) return;
 
     await this.forwardDiscordToQQ(message, bridge, referenceId);
+  }
+
+  /**
+   * Discord 命令分发：命中已注册命令根节点则执行并返回 true（消息不再转发），
+   * 否则返回 false 交回普通转发流程。
+   */
+  private async handleDiscordCommand(message: DiscordMessage, bridge: ResolvedBridge, raw: string): Promise<boolean> {
+    if (!this.bot) return false;
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith('/') && !trimmed.startsWith('!')) return false;
+    // Discord 客户端会把 / 开头内容当作斜杠命令输入，额外支持 ! 前缀兜底，统一归一化为 /
+    const normalized = normalizeCommandText(trimmed);
+    const rootName = normalized.slice(1).split(/\s/)[0];
+    if (!rootName || !this.isRegisteredCommand(rootName)) return false;
+    const groupId = Number(bridge.entry.group);
+    const source = new DiscordMsgCommandSource(this.bot, message, Number.isSafeInteger(groupId) ? groupId : undefined);
+    try {
+      this.bot.getCommandManager().execute(source, normalized);
+    } catch (error) {
+      this.bot.logger?.error(
+        `[DiscordBridge] Discord 命令执行失败: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`
+      );
+    }
+    return true;
+  }
+
+  /** 首段是否为已注册命令（遍历全部命名空间根节点的字面量子节点） */
+  private isRegisteredCommand(name: string): boolean {
+    const manager = this.bot?.getCommandManager();
+    if (!manager) return false;
+    for (const root of manager.roots.values()) {
+      if (root.children.some(child => child.isLiteral() && child.toString() === name)) return true;
+    }
+    return false;
+  }
+
+  /** 把 GitHub Issue/PR 查询结果以 Discord 回复发回原频道（图片为附件，失败提示为文本） */
+  private async sendGithubResultToDiscord(message: DiscordMessage, result: Message): Promise<void> {
+    try {
+      if (result.type === 'image') {
+        const base64 = this.extractBase64Payload(result.data.file);
+        if (!base64) return;
+        await message.reply({
+          files: [{ attachment: Buffer.from(base64, 'base64'), name: 'github.png' }],
+          allowedMentions: { parse: [], repliedUser: false }
+        });
+        return;
+      }
+      if (result.type === 'text') {
+        await message.reply({
+          content: this.truncateDiscord(result.data.text),
+          allowedMentions: { parse: [], repliedUser: false }
+        });
+      }
+    } catch (error) {
+      this.bot?.logger?.error(
+        `[DiscordBridge] GitHub 卡片回复失败: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   /** Discord→QQ 转发主流程；contentOverride 用于 /send（剥离命令前缀后的正文） */
@@ -461,7 +670,8 @@ export class DiscordBridge {
     }
 
     if (segments.length === 0) return;
-    const qqMessageId = await bot.sendGroupMsg(bridge.entry.group, segments);
+    // fromBridge：标记为桥自身发出的消息，发送出口钩子据此跳过，避免回环
+    const qqMessageId = await bot.sendGroupMsg(bridge.entry.group, segments, { fromBridge: true });
     if (qqMessageId !== undefined) {
       this.registerQQMessage(qqMessageId, message.id, viaCommand);
       this.bridgeByQQForward.set(qqMessageId, bridge.key);

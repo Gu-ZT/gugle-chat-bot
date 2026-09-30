@@ -12,11 +12,11 @@ import { Github } from '@/features/github';
 import { GitHubBindingManager } from '@/features/github/binding';
 import { Poke } from '@/features/poke';
 import { Arguments, CommandManager, CommandSource } from 'gugle-command';
+import { isBotCommandSource } from '@/command';
 import { MinecraftAPI } from '@/features/minecraft';
 import { ModrinthAPI } from '@/features/modrinth';
 import {
   getFeatureGroups,
-  isOperator,
   isValidRepositoryName,
   isValidRepositoryOwner,
   subscribeGithubRepository
@@ -42,7 +42,8 @@ class CustomBot {
 · /github allow <owner|owner/repo>：授权仓库访问（管理员）
 · /pardon <QQ号>：把用户移出黑名单（管理员）
 · /send <msg> [group|channel]：向互通的 Discord 频道/QQ 群发送消息（不填目标时发送到第一个互通条目的对端）
-· /pvtime：查询当前是梁文峰时间还是梁文谷时间`);
+· /pvtime：查询当前是梁文峰时间还是梁文谷时间
+以上命令均可在互通的 Discord 频道中使用（/ 或 ! 前缀），回复发在 Discord 频道`);
   }
 
   public static peakValleyTimeCommand(source: CommandSource) {
@@ -92,12 +93,12 @@ ${wiki.url}`);
   }
 
   public static githubBindCommand(source: CommandSource, username: string) {
-    if (!(source instanceof GroupMsgCommandSource)) {
-      source.fail('GitHub 绑定仅支持在群聊中使用');
+    if (!isBotCommandSource(source)) {
+      source.fail('GitHub 绑定仅支持在群聊或互通频道中使用');
       return;
     }
 
-    GitHubBindingManager.bind(source.msg.sender.user_id, username)
+    GitHubBindingManager.bind(source.getUserId(), username)
       .then(result => {
         if (result.state === 'bound') {
           source.success(`GitHub 用户 ${username} 绑定成功`);
@@ -111,18 +112,23 @@ ${wiki.url}`);
   }
 
   public static githubSubscribeCommand(source: CommandSource, repository: string) {
-    if (!(source instanceof GroupMsgCommandSource)) {
-      source.fail('GitHub 订阅仅支持在群聊中使用');
+    if (!isBotCommandSource(source)) {
+      source.fail('GitHub 订阅仅支持在群聊或互通频道中使用');
       return;
     }
     if (!isValidRepositoryName(repository)) {
       source.fail(`仓库名格式错误：${repository}\n应为 owner/repo，例如 Anvil-Dev/AnvilCraft`);
       return;
     }
+    const groupId = source.getGroupId();
+    if (groupId === undefined) {
+      source.fail('当前频道未绑定互通 QQ 群，无法订阅');
+      return;
+    }
     // 与消息查询同一套判定：owner 已绑定 GitHub 账号，或命中允许列表配置
     let allowedText = '';
     if (!Github.isAllowedRepository(repository)) {
-      if (!isOperator(source.msg.sender.user_id)) {
+      if (!source.isAdmin()) {
         source.fail(
           `仓库 ${repository} 不在允许访问的仓库列表中，无法订阅\n` +
             `如这是你自己的仓库，可先用 /github bind <用户名> 绑定 GitHub 账号，或联系管理员添加`
@@ -134,10 +140,8 @@ ${wiki.url}`);
       addGithubAllowedRepository(owner);
       allowedText = `· 已自动将 ${owner} 加入允许访问的仓库列表\n`;
     }
-    const subscribers = subscribeGithubRepository(repository, source.msg.group_id);
-    const current = subscribers.includes(source.msg.group_id)
-      ? `已订阅仓库 ${repository} 的消息推送`
-      : `订阅失败，请重试`;
+    const subscribers = subscribeGithubRepository(repository, groupId);
+    const current = subscribers.includes(groupId) ? `已订阅仓库 ${repository} 的消息推送` : `订阅失败，请重试`;
     source.success(
       `${current}
 · 当前订阅该仓库的群：${subscribers.length > 0 ? subscribers.join('、') : '（无）'}
@@ -154,11 +158,11 @@ ${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings 
    * 传入 owner 时授权其下全部仓库，传入 owner/repo 时只授权该仓库。
    */
   public static githubAllowCommand(source: CommandSource, target: string) {
-    if (!(source instanceof GroupMsgCommandSource)) {
-      source.fail('GitHub allow 仅支持在群聊中使用');
+    if (!isBotCommandSource(source)) {
+      source.fail('GitHub allow 仅支持在群聊或互通频道中使用');
       return;
     }
-    if (!isOperator(source.msg.sender.user_id)) {
+    if (!source.isAdmin()) {
       source.fail('该命令仅限管理员使用');
       return;
     }
@@ -184,8 +188,13 @@ ${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings 
   }
 
   public static pardonCommand(source: CommandSource, userId: string) {
-    if (!(source instanceof GroupMsgCommandSource)) {
-      source.fail('只支持在群聊中使用');
+    if (!isBotCommandSource(source)) {
+      source.fail('只支持在群聊或互通频道中使用');
+      return;
+    }
+    const groupId = source.getGroupId();
+    if (groupId === undefined) {
+      source.fail('当前频道未绑定互通 QQ 群，无法赦免');
       return;
     }
     const qq = Number(userId);
@@ -193,7 +202,10 @@ ${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings 
       source.fail(`QQ 号格式错误：${userId}`);
       return;
     }
-    Management.pardon(source.msg.group_id, source.msg.sender.user_id, qq)
+    // QQ 侧传 QQ 号（Management 内部再校验 operators 白名单）；
+    // Discord 侧传 dc:<用户ID>（服务器管理员身份已由命令源层校验）
+    const operatorId = source instanceof GroupMsgCommandSource ? source.msg.sender.user_id : source.getUserId();
+    Management.pardon(groupId, operatorId, qq)
       .then(removed => {
         if (removed) {
           source.success(`已从黑名单中移除用户 ${qq}`);

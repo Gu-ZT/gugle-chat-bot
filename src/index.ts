@@ -2,7 +2,7 @@ import process from 'node:process';
 import { Logger } from 'winston';
 import { RawData, WebSocket } from 'ws';
 import { botConfig, BotConfig } from '@/config';
-import { getFeatureGroups } from '@/config/features';
+import { getFeatureGroups, isOperator } from '@/config/features';
 import fs from 'node:fs';
 import dayjs from 'dayjs';
 import { LoggerFactory } from '@/logger';
@@ -13,8 +13,28 @@ import { Github } from '@/features/github';
 import * as cron from 'node-cron';
 import { BotEvent, BotEventCancelable, EventCallback } from '@/type/event';
 import { CommandManager, CommandSource } from 'gugle-command';
+import { BotCommandSource } from '@/command';
 
-export class GroupMsgCommandSource implements CommandSource {
+/** bot.sendGroupMsg 的附加选项 */
+export interface SendGroupMsgOptions {
+  /**
+   * 标记该消息由互通桥自身发出（Discord→QQ 转发、/send 结果等）。
+   * 发送出口监听器据此跳过，避免「转发出去的消息又被转发回 Discord」形成回环。
+   */
+  fromBridge?: boolean;
+}
+
+/** bot.sendGroupMsg 成功后的通知负载（供互通桥把机器人自身消息转发到 Discord） */
+export interface GroupMessageSentEvent {
+  groupId: number;
+  message: SentMessage;
+  /** OneBot 返回的消息 id；失败时为 undefined */
+  messageId: number | undefined;
+  /** 是否由互通桥自身发出（true 时监听方应忽略） */
+  fromBridge: boolean;
+}
+
+export class GroupMsgCommandSource implements BotCommandSource {
   public readonly bot: QQBot;
   public readonly msg: GroupMessageWSMSG;
   private readonly replayMsg: Message[];
@@ -30,6 +50,18 @@ export class GroupMsgCommandSource implements CommandSource {
         }
       }
     ];
+  }
+
+  public getUserId(): string {
+    return String(this.msg.sender.user_id);
+  }
+
+  public getGroupId(): number | undefined {
+    return this.msg.group_id;
+  }
+
+  public isAdmin(): boolean {
+    return isOperator(this.msg.sender.user_id);
   }
 
   public success(message: string): void {
@@ -93,6 +125,8 @@ export class QQBot {
   private checkHeartbeatFunc?: NodeJS.Timeout = undefined;
   private operationQueue: (() => void)[] = [];
   private lastOperationHandle = -1;
+  /** bot.sendGroupMsg 成功后的监听器（互通桥用它转发机器人自身消息到 Discord） */
+  private groupMessageSentListeners: ((event: GroupMessageSentEvent) => void)[] = [];
 
   public constructor(config: BotConfig) {
     this.config = config;
@@ -337,7 +371,11 @@ export class QQBot {
     });
   }
 
-  public sendGroupMsg(groupId: string | number, message: SentMessage): Promise<number | undefined> {
+  public sendGroupMsg(
+    groupId: string | number,
+    message: SentMessage,
+    options?: SendGroupMsgOptions
+  ): Promise<number | undefined> {
     return new Promise(resolve => {
       this.operation(() => {
         this.axiosInstance
@@ -345,13 +383,46 @@ export class QQBot {
             group_id: groupId,
             message: message
           })
-          .then(res => resolve(res?.data?.data?.message_id))
+          .then(res => {
+            const messageId: number | undefined = res?.data?.data?.message_id;
+            this.notifyGroupMessageSent({
+              groupId: Number(groupId),
+              message,
+              messageId,
+              fromBridge: options?.fromBridge === true
+            });
+            resolve(messageId);
+          })
           .catch(error => {
             this.logger?.error(`Failed to send group message to ${groupId}: ${error.message}`);
             resolve(undefined);
           });
       });
     });
+  }
+
+  /**
+   * 注册「群消息发送成功」监听器。
+   * 互通桥借此把机器人自身发出的消息（GitHub 通知、命令回复等）转发到 Discord。
+   * 注意：监听器必须忽略 `fromBridge === true` 的事件，避免回环。
+   */
+  public onGroupMessageSent(listener: (event: GroupMessageSentEvent) => void): void {
+    this.groupMessageSentListeners.push(listener);
+  }
+
+  private notifyGroupMessageSent(event: GroupMessageSentEvent): void {
+    for (const listener of this.groupMessageSentListeners) {
+      try {
+        listener(event);
+      } catch (e) {
+        this.logger?.error(`groupMessageSent listener failed: ${(e as Error)?.message ?? e}`);
+      }
+    }
+  }
+
+  /** 暴露命令管理器（Discord 侧命令分发需要复用同一套命令树） */
+  public getCommandManager(): CommandManager {
+    return this.commandManager;
   }
 
   // 设置禁言

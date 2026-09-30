@@ -12,6 +12,12 @@ import { fetchGithubApi } from '@/features/github/api';
 import { shouldPushRelease } from '@/features/github/image/impl/release';
 import axios, { AxiosInstance } from 'axios';
 
+/** 一条 Issue/PR 引用（`owner/repo#123`，repo 省略时为默认仓库） */
+export interface IssueReference {
+  repository: string;
+  number: number;
+}
+
 export class Github {
   private readonly bot: QQBot;
   private readonly logger: Logger;
@@ -163,8 +169,101 @@ export class Github {
     });
   }
 
-  public static processMessage(bot: QQBot, msg: GroupMessageWSMSG, sentMessage: Message[]): Promise<void> {
-    if (!isGithubEnabledGroup(msg.group_id)) return Promise.resolve();
+  /** 单条消息最多解析的 Issue/PR 引用数（防止刷屏，超出部分忽略） */
+  public static readonly MAX_REFERENCES_PER_MESSAGE = 10;
+
+  /**
+   * 解析文本中的全部 Issue/PR 引用（`owner/repo#123` 或 `#123`）。
+   * 按出现顺序去重（`repository#number`），最多返回 MAX_REFERENCES_PER_MESSAGE 条。
+   */
+  public static parseReferences(text: string, defaultRepository: string = 'Anvil-Dev/AnvilCraft'): IssueReference[] {
+    const pattern = /(?:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+))?#(\d+)/g;
+    const references: IssueReference[] = [];
+    const seen = new Set<string>();
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) {
+      const repository = match[1] || defaultRepository;
+      const number = Number.parseInt(match[2]!, 10);
+      const key = `${repository}#${number}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      references.push({ repository, number });
+      if (references.length >= Github.MAX_REFERENCES_PER_MESSAGE) break;
+    }
+    return references;
+  }
+
+  /**
+   * 渲染单个 Issue/PR 引用为 QQ 消息段：成功为图片段，失败为文本说明段。
+   * 仓库不在允许列表时返回提示文本（不发请求）。
+   */
+  public static async renderReference(bot: QQBot, reference: IssueReference): Promise<Message> {
+    const { repository, number } = reference;
+    if (!this.isAllowedRepository(repository)) {
+      return {
+        type: 'text',
+        data: {
+          text: `仓库 ${repository} 不在允许访问的仓库列表中`
+        }
+      };
+    }
+
+    const issueApiPath = `/repos/${repository}/issues/${number}`;
+    const pullApiPath = `/repos/${repository}/pulls/${number}`;
+
+    // 经 ghapi 反代获取 issue 数据
+    let issueData: Issue & { pull_request?: unknown };
+    try {
+      issueData = await Github.fetchGithubApi<Issue & { pull_request?: unknown }>(bot, issueApiPath);
+    } catch (e) {
+      bot.logger?.error(e);
+      return {
+        type: 'text',
+        data: {
+          text: `请求失败，原因：${(e as Error)?.message ?? e}`
+        }
+      };
+    }
+
+    try {
+      if (issueData.pull_request) {
+        // 如果是 PR，经 ghapi 反代获取 PR 数据
+        const prData = await Github.fetchGithubApi<PullRequest>(bot, pullApiPath);
+        const imageData = await GitHubImage.prHandler(prData, bot.logger);
+        return {
+          type: 'image',
+          data: {
+            file: `data:image/png;base64, ${imageData}`
+          }
+        };
+      }
+      // 处理 issue
+      const imageData = await GitHubImage.issuesHandler(issueData as Issue, bot.logger);
+      return {
+        type: 'image',
+        data: {
+          file: `data:image/png;base64, ${imageData}`
+        }
+      };
+    } catch (e) {
+      bot.logger?.error(e);
+      return {
+        type: 'text',
+        data: {
+          text: `图片处理失败，原因：${(e as Error)?.message ?? e}`
+        }
+      };
+    }
+  }
+
+  /**
+   * QQ 群消息入口：解析消息中的全部 Issue/PR 引用并逐个渲染。
+   * 第一个引用的结果并入 sentMessage（随调用方的回复消息一起发出）；
+   * 其余引用各自作为独立群消息发送（用户要求多编号时分多条消息发送）。
+   * 渲染串行执行以保证消息顺序与编号顺序一致。
+   */
+  public static async processMessage(bot: QQBot, msg: GroupMessageWSMSG, sentMessage: Message[]): Promise<void> {
+    if (!isGithubEnabledGroup(msg.group_id)) return;
 
     const receivedMessage: TextMessage[] = [];
     msg.message.forEach(message => {
@@ -173,97 +272,30 @@ export class Github {
     });
 
     const strMsg = receivedMessage.map(msg => msg.data.text).join(' ');
-    const issueReference = strMsg.match(/(?:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+))?#(\d+)/);
-    if (!issueReference?.[2]) return Promise.resolve();
+    const references = Github.parseReferences(strMsg);
+    if (references.length === 0) return;
 
-    const repository = issueReference[1] || 'Anvil-Dev/AnvilCraft';
-    if (!this.isAllowedRepository(repository)) {
-      sentMessage.push({
-        type: 'text',
-        data: {
-          text: `仓库 ${repository} 不在允许访问的仓库列表中`
-        }
-      });
-      return Promise.resolve();
+    for (let index = 0; index < references.length; index++) {
+      const rendered = await Github.renderReference(bot, references[index]!);
+      if (index === 0) {
+        sentMessage.push(rendered);
+      } else {
+        await bot.sendGroupMsg(msg.group_id, [rendered]);
+      }
     }
+  }
 
-    const number = Number.parseInt(issueReference[2], 10);
-    const issueApiPath = `/repos/${repository}/issues/${number}`;
-    const pullApiPath = `/repos/${repository}/pulls/${number}`;
-
-    return new Promise<void>((resolve, reject) => {
-      // 经 ghapi 反代获取 issue 数据
-      Github.fetchGithubApi<Issue & { pull_request?: unknown }>(bot, issueApiPath)
-        .then(issueData => {
-          if (issueData.pull_request) {
-            // 如果是 PR，经 ghapi 反代获取 PR 数据
-            Github.fetchGithubApi<PullRequest>(bot, pullApiPath)
-              .then(prData => {
-                GitHubImage.prHandler(prData, bot.logger)
-                  .then(imageData => {
-                    sentMessage.push({
-                      type: 'image',
-                      data: {
-                        file: `data:image/png;base64, ${imageData}`
-                      }
-                    });
-                    resolve();
-                  })
-                  .catch(e => {
-                    bot.logger?.error(e);
-                    sentMessage.push({
-                      type: 'text',
-                      data: {
-                        text: `图片处理失败，原因：${e.message}`
-                      }
-                    });
-                    resolve();
-                  });
-              })
-              .catch(e => {
-                bot.logger?.error(e);
-                sentMessage.push({
-                  type: 'text',
-                  data: {
-                    text: `请求失败，原因：${e.message}`
-                  }
-                });
-                resolve();
-              });
-          } else {
-            // 处理 issue
-            GitHubImage.issuesHandler(issueData as Issue, bot.logger)
-              .then(imageData => {
-                sentMessage.push({
-                  type: 'image',
-                  data: {
-                    file: `data:image/png;base64, ${imageData}`
-                  }
-                });
-                resolve();
-              })
-              .catch(e => {
-                bot.logger?.error(e);
-                sentMessage.push({
-                  type: 'text',
-                  data: {
-                    text: `图片处理失败，原因：${e.message}`
-                  }
-                });
-                resolve();
-              });
-          }
-        })
-        .catch(error => {
-          bot.logger?.error(error);
-          sentMessage.push({
-            type: 'text',
-            data: {
-              text: `请求失败，原因：${error.message}`
-            }
-          });
-          resolve();
-        });
-    });
+  /**
+   * Discord 侧入口：解析文本中的全部 Issue/PR 引用并渲染为消息段列表（由调用方发送）。
+   * groupId 为 Discord 频道桥接的 QQ 群号，用于复用「该群是否启用 github 功能」的判定。
+   */
+  public static async processDiscordMessage(bot: QQBot, text: string, groupId?: number): Promise<Message[]> {
+    if (groupId !== undefined && !isGithubEnabledGroup(groupId)) return [];
+    const references = Github.parseReferences(text);
+    const results: Message[] = [];
+    for (const reference of references) {
+      results.push(await Github.renderReference(bot, reference));
+    }
+    return results;
   }
 }

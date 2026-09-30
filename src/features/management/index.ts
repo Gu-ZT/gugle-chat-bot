@@ -88,12 +88,19 @@ export class Management {
    * /pardon <QQ号>：把用户从黑名单移除（赦免）。
    * 仅限 management 功能启用的群 + operators 管理员使用。
    *
+   * @param operatorId 操作者标识：QQ 管理员为 number（内部再校验 operators 白名单）；
+   *                   Discord 管理员为 `dc:<用户ID>` 字符串（其服务器管理员身份已在
+   *                   命令源层校验，这里仅做格式校验，字符串必须带 dc: 前缀）
    * @returns 返回是否成功赦免（true=已移除；false=不在黑名单/无权限）
    */
-  public static async pardon(groupId: number, operatorId: number, userId: number): Promise<boolean> {
+  public static async pardon(groupId: number, operatorId: number | string, userId: number): Promise<boolean> {
     const config = getFeatureConfig('management');
     if (!config.groups.includes(groupId)) return false;
-    if (!config.operators?.includes(operatorId)) return false;
+    if (typeof operatorId === 'number') {
+      if (!config.operators?.includes(operatorId)) return false;
+    } else if (!operatorId.startsWith('dc:')) {
+      return false;
+    }
 
     const banList = (await EventDataManager.getStorage('management', 'ban_list')) as number[] | undefined;
     if (!banList || !banList.includes(userId)) return false;

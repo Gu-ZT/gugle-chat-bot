@@ -24,14 +24,19 @@ export class GitHubBindingManager {
   private static readonly CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   private static bindings: GitHubBindings | undefined;
 
-  public static async bind(qqUserId: number, username: string): Promise<{ state: 'pending' | 'bound'; code?: string }> {
+  /**
+   * 绑定 GitHub 用户名。
+   * @param qqUserId 平台内用户标识：QQ 号为 number；Discord 用户为 `dc:<用户ID>` 字符串
+   *                 （`dc:` 前缀保证与纯数字 QQ 号不冲突，共用同一套绑定存储）
+   */
+  public static async bind(qqUserId: number | string, username: string): Promise<{ state: 'pending' | 'bound'; code?: string }> {
     const normalizedUsername = GitHubBindingManager.normalizeUsername(username);
     const bindings = GitHubBindingManager.load();
     const qqUserIdText = String(qqUserId);
 
     const boundQqUserId = bindings.githubToQq[normalizedUsername.toLowerCase()];
     if (boundQqUserId && boundQqUserId !== qqUserIdText) {
-      throw new Error(`GitHub 用户 ${normalizedUsername} 已被其他 QQ 用户绑定`);
+      throw new Error(`GitHub 用户 ${normalizedUsername} 已被其他用户绑定`);
     }
     if (GitHubBindingManager.hasBinding(qqUserIdText, normalizedUsername)) {
       return { state: 'bound' };
@@ -55,7 +60,7 @@ export class GitHubBindingManager {
     const normalizedProfileUsername = profile.login.toLowerCase();
     const profileBoundQqUserId = bindings.githubToQq[normalizedProfileUsername];
     if (profileBoundQqUserId && profileBoundQqUserId !== qqUserIdText) {
-      throw new Error(`GitHub 用户 ${profile.login} 已被其他 QQ 用户绑定`);
+      throw new Error(`GitHub 用户 ${profile.login} 已被其他用户绑定`);
     }
     if (!boundUsernames.some(boundUsername => boundUsername.toLowerCase() === normalizedProfileUsername)) {
       boundUsernames.push(profile.login);
