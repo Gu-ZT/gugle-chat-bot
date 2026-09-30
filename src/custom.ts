@@ -45,7 +45,8 @@ class CustomBot {
 · /pardon <QQ号>：把用户移出黑名单（管理员）
 · /send <msg> [group|channel]：向互通的 Discord 频道/QQ 群发送消息（不填目标时发送到第一个互通条目的对端）
 · /pvtime：查询当前是梁文峰时间还是梁文谷时间
-以上命令均可在互通的 Discord 频道中使用（/ 或 ! 前缀），回复发在 Discord 频道`);
+以上命令均可在互通的 Discord 频道中使用（/ 或 ! 前缀），回复发在 Discord 频道
+在启用的群/互通频道 @机器人 或命中关键词即可与 AI 对话（停止 / 清除上下文 为控制指令）`);
   }
 
   public static peakValleyTimeCommand(source: CommandSource) {

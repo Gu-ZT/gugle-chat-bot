@@ -3,9 +3,10 @@ import { GroupMessageSentEvent, QQBot } from '@/index';
 import { GroupMessageWSMSG, Message, SentMessage } from '@/type';
 import { ConfigStore } from '@/config/manager';
 import { escapeDiscord, isDiscordMarkdown, renderDiscordMessageToImage } from '@/features/discord-bridge/markdown';
-import { DiscordMsgCommandSource } from '@/features/discord-bridge/source';
+import { DiscordMsgCommandSource, isDiscordAdmin } from '@/features/discord-bridge/source';
 import { normalizeCommandText } from '@/command';
 import { Github } from '@/features/github';
+import { HermesBridge } from '@/features/hermes';
 
 /**
  * QQ 群 ⇄ Discord 频道互通模块。
@@ -37,7 +38,9 @@ import { Github } from '@/features/github';
  * - Discord 频道中可直接使用全部已注册命令（/ 或 ! 前缀），回复发在 Discord 频道；
  *   未注册命令的 /xxx 文本按普通消息转发，不会回发 Invalid command；
  * - Discord 消息中的 `#编号` / `owner/repo#编号` 会查询 GitHub Issue/PR 并以图片卡片
- *   回复在 Discord 频道（一条消息多个编号全部解析，与 QQ 侧同一套渲染）。
+ *   回复在 Discord 频道（一条消息多个编号全部解析，与 QQ 侧同一套渲染）；
+ * - 互通频道消息可触发 Hermes AI（审批回复 /@提及 / 关键词），频道是否启用由其桥接的
+ *   QQ 群在 hermes.json groups 中决定，AI 回复发在 Discord 频道。
  *
  * 前置条件：Discord 开发者后台为 bot 开启 Message Content Intent，并邀请入对应服务器。
  */
@@ -542,6 +545,54 @@ export class DiscordBridge {
       for (const result of results) {
         await this.sendGithubResultToDiscord(message, result);
       }
+    }
+
+    // Hermes AI：互通频道消息可触发 AI（审批回复 / @提及 / 关键词，频道是否启用由其桥接的
+    // QQ 群在 hermes.json groups 中决定）。AI 回复经注入的委托发在 Discord 频道；
+    // 消息本身仍按门控决定是否转发到 QQ
+    if (this.bot) {
+      const bot = this.bot;
+      const channel = message.channel as TextChannel;
+      HermesBridge.getInstance().handleDiscordMessage(bot, message, {
+        groupId: bridge.entry.group,
+        ...(this.client?.user?.id ? { botUserId: this.client.user.id } : {}),
+        guildName: message.guild?.name ?? bridge.guildId,
+        channelName: channel.name,
+        isAdmin: isDiscordAdmin(message),
+        send: async (text, quote) => {
+          // 委托侧兜底 2000 字上限（Hermes 已按 maxMessageLength 切分，通常不会触发）
+          const chunks: string[] = [];
+          let rest = text;
+          while (rest.length > DISCORD_MESSAGE_LIMIT) {
+            chunks.push(rest.slice(0, DISCORD_MESSAGE_LIMIT));
+            rest = rest.slice(DISCORD_MESSAGE_LIMIT);
+          }
+          if (rest) chunks.push(rest);
+          for (let index = 0; index < chunks.length; index++) {
+            const content = chunks[index]!;
+            try {
+              if (quote && index === 0) {
+                await message.reply({ content, allowedMentions: { parse: [], repliedUser: false } });
+              } else {
+                await channel.send({ content, allowedMentions: { parse: [] } });
+              }
+            } catch (error) {
+              bot.logger?.error(
+                `[DiscordBridge] Hermes 回复发送失败: ${error instanceof Error ? error.message : String(error)}`
+              );
+            }
+          }
+        },
+        sendImage: async base64 => {
+          await channel
+            .send({ files: [{ attachment: Buffer.from(base64, 'base64'), name: 'image.png' }] })
+            .catch(error => {
+              bot.logger?.error(
+                `[DiscordBridge] Hermes 图片发送失败: ${error instanceof Error ? error.message : String(error)}`
+              );
+            });
+        }
+      });
     }
 
     // 门控：need_cmd 开启时仅放行「对桥消息的回复」（need_reply 不限制此方向）

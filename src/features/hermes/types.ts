@@ -5,11 +5,40 @@
 
 // ── 路由 ──
 
-/** 消息来源路由：群聊或私聊 */
+/**
+ * Discord 路由的发送委托（由 DiscordBridge 注入，随 RouteInfo 传递）。
+ * HermesBridge 不直接持有 discord.js Client，经委托向原频道发送回复/图片。
+ */
+export interface DiscordRouteContext {
+  guildName: string;
+  channelName: string;
+  /** 发送者是否为 Discord 侧管理员（服务器拥有者/管理服务器/管理员权限） */
+  isAdmin: boolean;
+  /** 发送文本；quote=true 时首条引用原始消息 */
+  send(text: string, quote: boolean): Promise<void>;
+  /** 发送 base64 图片（Discord 附件） */
+  sendImage(base64: string): Promise<void>;
+}
+
+/** handleDiscordMessage 的调用参数（DiscordRouteContext + 消息元信息） */
+export interface DiscordChatParams extends DiscordRouteContext {
+  /** 该频道桥接的 QQ 群号（会话共享与启用门控） */
+  groupId: string;
+  /** bot 的 Discord 用户 ID（@提及检测与剔除） */
+  botUserId?: string;
+}
+
+/** 消息来源路由：QQ 群聊、QQ 私聊或 Discord 频道 */
 export interface RouteInfo {
-  type: 'group' | 'user';
+  type: 'group' | 'user' | 'discord';
+  /** QQ 群号；discord 路由为桥接的 QQ 群号（与 QQ 群共享会话上下文） */
   groupId?: string;
+  /** QQ 号字符串；discord 路由为 `dc:<Discord用户ID>` */
   userId: string;
+  /** discord 路由：频道 ID */
+  channelId?: string;
+  /** discord 路由：发送委托（DiscordBridge 注入） */
+  discord?: DiscordRouteContext;
 }
 
 // ── 会话 ──

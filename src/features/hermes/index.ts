@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { Message as DiscordMessage } from 'discord.js';
 import { QQBot } from '@/index';
 import { ForwardMessage, GroupMessageWSMSG, Message, PrivateMessageWSMSG, ReceiveMessage } from '@/type';
 import { getHermesConfig, isHermesAdmin } from '@/features/hermes/config';
@@ -17,6 +18,7 @@ import {
 import {
   Approval,
   ApprovalChoice,
+  DiscordChatParams,
   FormattedMessage,
   GroupAdminApi,
   HermesApprovalEvent,
@@ -42,6 +44,15 @@ import {
  * - 审批否定词（不允许/不批准）匹配顺序修正（上游先匹配「批准」导致否定词不可达）；
  * - 不实现 COMPACT_LINES 合并转发（上游默认关闭），长回复按长度切分发送；
  * - AI 的群回复经 bot.sendGroupMsg 发出，会按既定行为同步转发到互通的 Discord 频道。
+ *
+ * Discord 频道触发（对上游的扩展）：
+ * - 互通的 Discord 频道消息同样可触发 AI（@提及/关键词/requireMention 同一套规则），
+ *   频道是否启用由其桥接的 QQ 群是否在 hermes.json groups 中决定；
+ * - Discord 与 QQ 群共享同一份会话上下文（group:{群号}），AI 能看到两侧的对话；
+ * - AI 回复发在提问侧（Discord 提问回 Discord，QQ 提问回 QQ），发送经 DiscordBridge
+ *   注入的委托完成，本模块不持有 discord.js Client；
+ * - Discord 侧管理员（服务器拥有者/管理服务器/管理员权限）可审批与调用管理技能；
+ *   QQ 用户黑白名单（allowedUsers/blockedUsers）不约束 Discord 用户。
  */
 
 /** 图片扩展名 → MIME 类型映射（本地图片转 base64 data URL 用） */
@@ -107,6 +118,15 @@ export class HermesBridge {
     });
   }
 
+  /** Discord 频道消息钩子（由 DiscordBridge 调用，发送经注入的委托完成） */
+  public handleDiscordMessage(bot: QQBot, message: DiscordMessage, params: DiscordChatParams): void {
+    this.handleDiscordMessageSafe(bot, message, params).catch(error => {
+      bot.logger?.error(
+        `[Hermes] Discord 消息处理失败: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`
+      );
+    });
+  }
+
   // ===================================================================
   //  访问控制与触发
   // ===================================================================
@@ -114,11 +134,27 @@ export class HermesBridge {
   /** 检查用户是否有权与 Bot 对话 */
   private canChat(route: RouteInfo): boolean {
     const config = getHermesConfig();
+    if (route.type === 'discord') {
+      // Discord 频道由其桥接的 QQ 群决定是否启用；QQ 用户黑白名单不约束 Discord 用户
+      return config.groups.includes(Number(route.groupId));
+    }
     const uid = Number(route.userId);
     if (config.blockedUsers.includes(uid)) return false;
     if (config.allowedUsers.length > 0 && !config.allowedUsers.includes(uid) && !isHermesAdmin(uid)) return false;
     if (route.type === 'group' && !config.groups.includes(Number(route.groupId))) return false;
     return true;
+  }
+
+  /** 路由是否指向同一会话域（QQ 群与互通的 Discord 频道按桥接群号对齐） */
+  private routeMatches(a: RouteInfo, b: RouteInfo): boolean {
+    if (a.type === 'user' || b.type === 'user') return a.type === b.type && a.userId === b.userId;
+    return a.groupId !== undefined && a.groupId === b.groupId;
+  }
+
+  /** 路由发送者是否为管理员（QQ 侧取 hermes admins ∪ operators，Discord 侧取服务器权限） */
+  private isRouteAdmin(route: RouteInfo): boolean {
+    if (route.type === 'discord') return route.discord?.isAdmin === true;
+    return isHermesAdmin(Number(route.userId));
   }
 
   /** 检查是否 @了 Bot */
@@ -162,9 +198,9 @@ export class HermesBridge {
     return this.historyStore;
   }
 
-  /** 获取会话键（群聊按群共享，私聊按人隔离） */
+  /** 获取会话键（QQ 群与互通的 Discord 频道按群共享，私聊按人隔离） */
   private getSessionKey(route: RouteInfo): string {
-    return route.type === 'group' ? `group:${route.groupId}` : `user:${route.userId}`;
+    return route.type === 'user' ? `user:${route.userId}` : `group:${route.groupId}`;
   }
 
   /** 获取或创建会话（优先从持久化存储恢复） */
@@ -247,8 +283,12 @@ export class HermesBridge {
   //  消息发送
   // ===================================================================
 
-  /** 发送文本回复（超长按 maxMessageLength 切分） */
+  /** 发送文本回复（超长按 maxMessageLength 切分；discord 路由经委托发送） */
   private async sendReply(route: RouteInfo, text: string): Promise<void> {
+    if (route.type === 'discord') {
+      await route.discord?.send(text, false);
+      return;
+    }
     if (!this.bot) return;
     const chunks = splitMessageText(text, getHermesConfig().maxMessageLength);
     for (const chunk of chunks) {
@@ -260,8 +300,12 @@ export class HermesBridge {
     }
   }
 
-  /** 发送带引用的文本回复（群聊回复原消息，私聊退化为普通发送） */
+  /** 发送带引用的文本回复（群聊回复原消息，私聊退化为普通发送；discord 路由引用原消息） */
   private async sendReplyWithMention(route: RouteInfo, text: string, userMsgId: number): Promise<void> {
+    if (route.type === 'discord') {
+      await route.discord?.send(text, true);
+      return;
+    }
     if (!this.bot) return;
     if (route.type === 'group' && userMsgId) {
       const chunks = splitMessageText(text, getHermesConfig().maxMessageLength);
@@ -276,8 +320,13 @@ export class HermesBridge {
     await this.sendReply(route, text);
   }
 
-  /** 发送图片（base64，允许已带 base64:// 前缀） */
+  /** 发送图片（base64，允许已带 base64:// 前缀；discord 路由以附件发送） */
   private async sendReplyImage(route: RouteInfo, imageData: string): Promise<void> {
+    if (route.type === 'discord') {
+      const base64 = imageData.startsWith('base64://') ? imageData.slice('base64://'.length) : imageData;
+      await route.discord?.sendImage(base64);
+      return;
+    }
     if (!this.bot) return;
     const file = imageData.startsWith('base64://') ? imageData : `base64://${imageData}`;
     try {
@@ -578,6 +627,9 @@ export class HermesBridge {
     const config = getHermesConfig();
     const rawText = this.extractText(msg.message);
 
+    // 审批回复优先于触发判定（仅管理员的选择类文本会被拦截，避免误伤正常聊天）
+    if (rawText && (await this.handleApprovalReply(route, rawText, msg.message_id))) return;
+
     // 触发判定：私聊始终触发；群聊按 @提及/关键词/requireMention（含命令守卫）
     let triggered = true;
     let reason = 'private';
@@ -606,9 +658,6 @@ export class HermesBridge {
     const text = formatted.text;
     if (!text) return;
 
-    // 审批回复检测
-    if (await this.handleApprovalReply(route, text, msg.message_id)) return;
-
     // 停止命令
     if (isStopCommand(text)) {
       await this.handleStopCommand(route);
@@ -622,26 +671,194 @@ export class HermesBridge {
       return;
     }
 
-    // 构建用户提示词
-    const senderLabel = this.senderLabel(msg.sender, route.userId);
-    const userPrompt = route.type === 'group' ? `${senderLabel}: ${text}` : text;
+    await this.startHermesRun(
+      bot,
+      route,
+      text,
+      formatted.images,
+      this.senderLabel(msg.sender, route.userId),
+      msg.message_id
+    );
+  }
+
+  // ===================================================================
+  //  Discord 消息处理
+  // ===================================================================
+
+  /** Discord 消息处理主入口（与 QQ 共用触发/审批/会话逻辑） */
+  private async handleDiscordMessageSafe(bot: QQBot, message: DiscordMessage, params: DiscordChatParams): Promise<void> {
+    if (message.author.bot || message.webhookId) return;
+    this.bot = bot;
+
+    const route: RouteInfo = {
+      type: 'discord',
+      groupId: params.groupId,
+      userId: `dc:${message.author.id}`,
+      channelId: message.channelId,
+      discord: params
+    };
+    if (!this.canChat(route)) return;
+
+    const config = getHermesConfig();
+    const rawText = this.plainDiscordText(message, params.botUserId);
+
+    // 审批回复优先于触发判定（仅管理员的选择类文本会被拦截）
+    if (rawText && (await this.handleApprovalReply(route, rawText, 0))) return;
+
+    const mentioned = params.botUserId ? message.mentions.has(params.botUserId) : false;
+    const decision = decideGroupTrigger({
+      text: rawText,
+      mentioned,
+      requireMention: config.requireMention,
+      keywordTriggers: config.keywordTriggers
+    });
+
+    const displayName = message.member?.displayName ?? message.author.username;
+    const label = this.senderLabel({ nickname: displayName }, route.userId);
+
+    if (!decision.triggered) {
+      // 未触发的频道消息记录到共享会话的背景上下文（AI 可感知两侧对话）
+      if (rawText) {
+        this.appendHistory(this.getSessionKey(route), 'user', `${label}: ${rawText}`, route.userId);
+      }
+      return;
+    }
+
+    bot.logger?.info(
+      `[Hermes] 触发: ${decision.reason} from ${route.userId} in discord:${params.guildName}#${params.channelName}`
+    );
+
+    const formatted = await this.formatDiscordMessage(message, params.botUserId);
+    const text = formatted.text;
+    if (!text) return;
+
+    if (isStopCommand(text)) {
+      await this.handleStopCommand(route);
+      return;
+    }
+    if (isResetCommand(text)) {
+      const newVersion = this.clearSession(route);
+      await this.sendReplyWithMention(route, `✅ 上下文已清除，开始新对话 (v${newVersion})`, 0);
+      return;
+    }
+
+    await this.startHermesRun(bot, route, text, formatted.images, label, 0);
+  }
+
+  /** Discord 消息正文纯文本化：提及/角色/频道/自定义表情 → 可读文本，并剔除对 bot 的提及 */
+  private plainDiscordText(message: DiscordMessage, botUserId?: string): string {
+    let text = message.content ?? '';
+    if (botUserId) text = text.replace(new RegExp(`<@!?${botUserId}>`, 'g'), '');
+    text = text.replace(/<@!?(\d+)>/g, (_match, id: string) => {
+      const name = message.mentions.members?.get(id)?.displayName ?? message.mentions.users.get(id)?.username;
+      return `@${name ?? id}(${id})`;
+    });
+    text = text.replace(/<@&(\d+)>/g, (_match, id: string) => {
+      return `@${message.guild?.roles.cache.get(id)?.name ?? id}`;
+    });
+    text = text.replace(/<#(\d+)>/g, (_match, id: string) => {
+      return `#${message.guild?.channels.cache.get(id)?.name ?? id}`;
+    });
+    text = text.replace(/<a?:(\w{2,32}):\d+>/g, ':$1:');
+    return text.trim();
+  }
+
+  /**
+   * 将 Discord 消息转换为 AI 可理解的富文本格式：
+   * 正文 → 可读文本；回复引用 → 引用块（含其中图片）；图片附件 → [图片] + 原图
+   * （forwardImages 可关）；其余附件/贴纸 → 占位符。
+   */
+  private async formatDiscordMessage(message: DiscordMessage, botUserId?: string): Promise<FormattedMessage> {
+    const config = getHermesConfig();
+    const parts: string[] = [];
+    const images: string[] = [];
+
+    const text = this.plainDiscordText(message, botUserId);
+    if (text) parts.push(text);
+
+    // 回复引用：拉取被引用消息，转为引用块（含其中图片）
+    const referenceId = message.reference?.messageId;
+    if (referenceId) {
+      try {
+        const original = await message.channel.messages.fetch(referenceId);
+        const name = original.member?.displayName ?? original.author.username;
+        const time = this.formatTime(Math.floor(original.createdTimestamp / 1000));
+        const content = this.plainDiscordText(original, botUserId) || '[非文本消息]';
+        parts.push(`> ${name}(dc:${original.author.id}) ${time}\n> ${content}\n`);
+        if (config.forwardImages) {
+          for (const attachment of original.attachments.values()) {
+            if (attachment.contentType?.startsWith('image/')) {
+              const dataUrl = await this.downloadImageToDataUrlSafe(attachment.url);
+              if (dataUrl) images.push(dataUrl);
+            }
+          }
+        }
+      } catch {
+        parts.push('> [引用消息获取失败]\n');
+      }
+    }
+
+    // 附件：图片转多模态输入，其余类型占位
+    for (const attachment of message.attachments.values()) {
+      if (attachment.contentType?.startsWith('image/')) {
+        parts.push('[图片]');
+        if (config.forwardImages) {
+          const dataUrl = await this.downloadImageToDataUrlSafe(attachment.url);
+          if (dataUrl) images.push(dataUrl);
+        }
+      } else {
+        parts.push(`[附件 ${attachment.name}]`);
+      }
+    }
+    if (message.stickers.size > 0) parts.push('[贴纸]');
+
+    return { text: parts.join('\n').trim(), images };
+  }
+
+  /** 下载图片为 data URL，失败返回 null（仅保留 [图片] 占位符） */
+  private async downloadImageToDataUrlSafe(url: string): Promise<string | null> {
+    try {
+      return await this.downloadImageToDataUrl(url);
+    } catch (error) {
+      this.bot?.logger?.error(`[Hermes] Discord 图片下载失败 ${url}: ${(error as Error).message}`);
+      return null;
+    }
+  }
+
+  // ===================================================================
+  //  Hermes 运行提交（QQ 与 Discord 共用）
+  // ===================================================================
+
+  /** 组装提示词、提交 Hermes 运行并挂接 SSE 事件流 */
+  private async startHermesRun(
+    bot: QQBot,
+    route: RouteInfo,
+    text: string,
+    images: string[],
+    senderLabel: string,
+    replyMsgId: number
+  ): Promise<void> {
+    const config = getHermesConfig();
+
+    // 构建用户提示词（私聊不带发言人前缀）
+    const userPrompt = route.type === 'user' ? text : `${senderLabel}: ${text}`;
     // 带图消息：组装 OpenAI 多模态内容段，将原图传给 Hermes
     const userMessage: string | MessageContentPart[] =
-      formatted.images.length > 0
+      images.length > 0
         ? [
             { type: 'text', text: userPrompt },
-            ...formatted.images.map((url): MessageContentPart => ({ type: 'image_url', image_url: { url } }))
+            ...images.map((url): MessageContentPart => ({ type: 'image_url', image_url: { url } }))
           ]
         : userPrompt;
 
     const sessionKey = this.getSessionKey(route);
     const session = this.getSession(sessionKey);
     const sessionVersion = session.sessionVersion || 0;
-    // Hermes sessionId 按人区分；群聊日志仍按群共享
-    const hermesSessionBase = route.type === 'group' ? `group_${route.groupId}_user_${route.userId}` : `user_${route.userId}`;
+    // Hermes sessionId 按人区分；群聊/频道日志仍按群共享
+    const hermesSessionBase = route.type === 'user' ? `user_${route.userId}` : `group_${route.groupId}_user_${route.userId}`;
     const hermesSessionId = sessionVersion > 0 ? `${hermesSessionBase}:v${sessionVersion}` : hermesSessionBase;
 
-    const historyContent = route.type === 'group' ? `${senderLabel}: ${text}` : text;
+    const historyContent = route.type === 'user' ? text : `${senderLabel}: ${text}`;
     this.appendHistory(sessionKey, 'user', historyContent, route.userId);
 
     // 组装系统提示词：configs/SOUL.md > systemPrompt > 空 + 群聊上下文 + 技能列表
@@ -649,7 +866,9 @@ export class HermesBridge {
     const groupContext =
       route.type === 'group'
         ? `你正在 QQ 群 ${route.groupId} 中。群聊有多个成员，不同 QQ 号代表不同的人，请根据发送者标识区分。回复请简短口语化，符合 QQ 聊天风格。`
-        : '';
+        : route.type === 'discord'
+          ? `你正在 QQ 群 ${route.groupId} 互通的 Discord 频道 #${route.discord?.channelName ?? ''} 中。聊天有多个成员，不同发送者标识代表不同的人（纯数字为 QQ 号，dc: 前缀为 Discord 用户），请根据发送者标识区分。回复请简短口语化。`
+          : '';
     const skillsPrompt = this.skillManager.buildPrompt();
     const systemPrompt = [baseSystem, groupContext, skillsPrompt].filter(Boolean).join('\n\n') || undefined;
 
@@ -675,7 +894,7 @@ export class HermesBridge {
         sentTextLength: 0,
         lastTextSent: 0,
         finalOutput: '',
-        userMsgId: msg.message_id
+        userMsgId: replyMsgId
       };
       this.activeRuns.set(runId, runState);
 
@@ -749,7 +968,7 @@ export class HermesBridge {
       runState.stream = stream;
     } catch (error) {
       bot.logger?.error(`[Hermes] 提交错误: ${(error as Error).message}`);
-      await this.sendReplyWithMention(route, `❌ 调用 Hermes 失败: ${(error as Error).message}`, msg.message_id);
+      await this.sendReplyWithMention(route, `❌ 调用 Hermes 失败: ${(error as Error).message}`, replyMsgId);
     }
   }
 
@@ -798,10 +1017,10 @@ export class HermesBridge {
       return;
     }
 
-    // 执行技能标签
+    // 执行技能标签（管理技能的权限按路由发送者判定：QQ 取 operators，Discord 取服务器权限）
     output = await this.skillManager.processTags(output, run.route, {
       api: this.groupAdminApi(),
-      isAdmin: userId => isHermesAdmin(Number(userId))
+      isAdmin: () => this.isRouteAdmin(run.route)
     });
     this.appendHistory(this.getSessionKey(run.route), 'assistant', output);
 
@@ -835,13 +1054,10 @@ export class HermesBridge {
   //  停止命令
   // ===================================================================
 
-  /** 处理停止命令 */
+  /** 处理停止命令（QQ 群与互通的 Discord 频道按会话域匹配，可互相停止） */
   private async handleStopCommand(route: RouteInfo): Promise<void> {
     for (const [runId, run] of this.activeRuns) {
-      if (
-        (route.type === 'group' && run.route.groupId === route.groupId) ||
-        (route.type === 'user' && run.route.userId === route.userId)
-      ) {
+      if (this.routeMatches(route, run.route)) {
         await this.hermes.stopRun(runId);
         await this.sendReply(route, '已停止当前任务 ✋');
         return;
@@ -941,42 +1157,40 @@ export class HermesBridge {
     await this.sendReply(route, lines.join('\n'));
   }
 
-  /** 处理审批回复（命中返回 true 表示该消息已作为审批处理） */
+  /**
+   * 处理审批回复（在触发判定之前调用；命中返回 true 表示该消息已作为审批处理）。
+   * 仅拦截「同一会话域存在待审批 + 文本可解析为审批选择 + 发送者是管理员」的消息；
+   * 非管理员的选择类文本（如 "ok"）不拦截，避免审批等待期间误伤正常聊天。
+   * QQ 群与互通的 Discord 频道按会话域匹配，两侧管理员可互相审批。
+   */
   private async handleApprovalReply(route: RouteInfo, text: string, msgId: number): Promise<boolean> {
     for (const [runId, approval] of this.pendingApprovals) {
-      const approvalRoute = approval.route;
-      if (
-        (route.type === 'group' && approvalRoute.groupId === route.groupId) ||
-        (route.type === 'user' && approvalRoute.userId === route.userId)
-      ) {
-        const choice: ApprovalChoice | null = parseApprovalChoice(text);
-        if (!choice) return false;
+      if (!this.routeMatches(route, approval.route)) continue;
 
-        // 仅管理员可审批
-        if (!isHermesAdmin(Number(route.userId))) {
-          await this.sendReplyWithMention(route, '❌ 只有管理员可以审批操作', msgId);
-          return true;
-        }
+      const choice: ApprovalChoice | null = parseApprovalChoice(text);
+      if (!choice) return false;
 
-        if (approval.timeoutTimer) clearTimeout(approval.timeoutTimer);
-        this.pendingApprovals.delete(runId);
-        this.approvalMessageSent.delete(runId);
+      // 仅管理员可审批（非管理员不拦截，按普通消息继续走触发/转发流程）
+      if (!this.isRouteAdmin(route)) return false;
 
-        try {
-          await this.hermes.resolveApproval(runId, choice);
-          const labels: Record<ApprovalChoice, string> = {
-            once: '已批准（一次）✅',
-            deny: '已拒绝 ❌',
-            always: '已设置始终允许 ♾️',
-            session: '已允许本次会话 ✅'
-          };
-          await this.sendReplyWithMention(route, labels[choice], msgId);
-        } catch (error) {
-          await this.sendReply(route, `审批处理失败: ${(error as Error).message}`);
-        }
+      if (approval.timeoutTimer) clearTimeout(approval.timeoutTimer);
+      this.pendingApprovals.delete(runId);
+      this.approvalMessageSent.delete(runId);
 
-        return true;
+      try {
+        await this.hermes.resolveApproval(runId, choice);
+        const labels: Record<ApprovalChoice, string> = {
+          once: '已批准（一次）✅',
+          deny: '已拒绝 ❌',
+          always: '已设置始终允许 ♾️',
+          session: '已允许本次会话 ✅'
+        };
+        await this.sendReplyWithMention(route, labels[choice], msgId);
+      } catch (error) {
+        await this.sendReply(route, `审批处理失败: ${(error as Error).message}`);
       }
+
+      return true;
     }
     return false;
   }

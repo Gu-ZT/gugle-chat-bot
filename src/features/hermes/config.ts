@@ -17,7 +17,8 @@ import { isOperator } from '@/config/features';
  *   "keywordTriggers": ["小喵"]
  * }
  * ```
- * - `groups`：启用 AI 对话的 QQ 群（空=群聊不启用）；私聊始终启用（受用户黑白名单约束）；
+ * - `groups`：启用 AI 对话的 QQ 群（空=群聊不启用）；互通的 Discord 频道能否触发 AI
+ *   也由其桥接的 QQ 群是否在此列表决定；私聊始终启用（受用户黑白名单约束）；
  * - Bot QQ 号无需配置，取 bot.getLoginInfoSync().user_id（@提及判定）；
  * - 系统提示词优先级：configs/SOUL.md > systemPrompt > 空。
  */

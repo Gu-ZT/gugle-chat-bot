@@ -5,6 +5,17 @@ import { QQBot } from '@/index';
 const DISCORD_MESSAGE_LIMIT = 2000;
 
 /**
+ * Discord 侧管理员判定：服务器拥有者，或拥有「管理服务器」/「管理员」权限的成员。
+ * 命令源（DiscordMsgCommandSource）与 Hermes AI（审批/技能门控）共用同一口径。
+ */
+export function isDiscordAdmin(message: DiscordMessage): boolean {
+  if (message.guild?.ownerId === message.author.id) return true;
+  const permissions = message.member?.permissions;
+  if (!permissions) return false;
+  return permissions.has(PermissionFlagsBits.Administrator) || permissions.has(PermissionFlagsBits.ManageGuild);
+}
+
+/**
  * Discord 频道命令源：让 gugle-command 已注册的全部命令都能在 Discord 频道中执行，
  * 命令回复（success/fail）以 Discord 回复的形式发回原频道。
  *
@@ -35,10 +46,7 @@ export class DiscordMsgCommandSource implements BotCommandSource {
   }
 
   public isAdmin(): boolean {
-    if (this.message.guild?.ownerId === this.message.author.id) return true;
-    const permissions = this.message.member?.permissions;
-    if (!permissions) return false;
-    return permissions.has(PermissionFlagsBits.Administrator) || permissions.has(PermissionFlagsBits.ManageGuild);
+    return isDiscordAdmin(this.message);
   }
 
   public success(message: string): void {
