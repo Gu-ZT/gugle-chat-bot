@@ -1,0 +1,983 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { QQBot } from '@/index';
+import { ForwardMessage, GroupMessageWSMSG, Message, PrivateMessageWSMSG, ReceiveMessage } from '@/type';
+import { getHermesConfig, isHermesAdmin } from '@/features/hermes/config';
+import { HermesClient } from '@/features/hermes/client';
+import { SkillManager } from '@/features/hermes/skills';
+import { ChatHistoryStore } from '@/features/hermes/history';
+import { renderApprovalImage, renderProgressImage } from '@/features/hermes/render';
+import {
+  decideGroupTrigger,
+  isResetCommand,
+  isStopCommand,
+  parseApprovalChoice,
+  splitMessageText
+} from '@/features/hermes/trigger';
+import {
+  Approval,
+  ApprovalChoice,
+  FormattedMessage,
+  GroupAdminApi,
+  HermesApprovalEvent,
+  MessageContentPart,
+  OneBotForwardNode,
+  OneBotGetForwardMsgResponse,
+  OneBotGetMsgResponse,
+  OneBotGroupMemberInfo,
+  RouteInfo,
+  RunState,
+  Session
+} from '@/features/hermes/types';
+
+/**
+ * QQ ⇄ Hermes Agent 桥接（移植自 qq-hermes-bridge src/index.ts，MIT 协议，原作者 Amorter：
+ * https://github.com/Amorter/qq-hermes-bridge）。
+ *
+ * 与上游的差异：
+ * - OneBot 连接/事件/发送全部复用本仓库 QQBot（不再自建 WebSocket 客户端）；
+ * - 配置改为 configs/features/hermes.json（ConfigStore 热重载），SOUL.md 读 configs/SOUL.md；
+ * - 管理员 = hermes admins ∪ management operators；
+ * - 群聊命令守卫：/ 或 ! 开头的消息不触发（除非显式 @bot），避免与 gugle-command 双重响应；
+ * - 审批否定词（不允许/不批准）匹配顺序修正（上游先匹配「批准」导致否定词不可达）；
+ * - 不实现 COMPACT_LINES 合并转发（上游默认关闭），长回复按长度切分发送；
+ * - AI 的群回复经 bot.sendGroupMsg 发出，会按既定行为同步转发到互通的 Discord 频道。
+ */
+
+/** 图片扩展名 → MIME 类型映射（本地图片转 base64 data URL 用） */
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp'
+};
+
+/** 从路径/URL 扩展名推断 MIME，未知默认 image/jpeg */
+function mimeFromPath(filePath: string): string {
+  const ext = filePath.split('.').pop()?.split(/[?#]/)[0]?.toLowerCase() || '';
+  return IMAGE_MIME_BY_EXT[ext] || 'image/jpeg';
+}
+
+export class HermesBridge {
+  private static instance?: HermesBridge;
+
+  public static getInstance(): HermesBridge {
+    if (!HermesBridge.instance) HermesBridge.instance = new HermesBridge();
+    return HermesBridge.instance;
+  }
+
+  private bot?: QQBot;
+  private readonly hermes = new HermesClient();
+  private readonly skillManager = new SkillManager();
+
+  /** 对话会话：sessionKey → Session */
+  private readonly sessions = new Map<string, Session>();
+  /** 活跃运行：runId → RunState */
+  private readonly activeRuns = new Map<string, RunState>();
+  /** 待审批记录：runId → Approval */
+  private readonly pendingApprovals = new Map<string, Approval>();
+  /** 已发送审批消息跟踪：runId → true（防止重复发送） */
+  private readonly approvalMessageSent = new Map<string, boolean>();
+  /** 群成员昵称缓存：groupId:userId → 群名片或昵称 */
+  private readonly memberCache = new Map<string, string>();
+
+  /** 历史存储（随持久化配置变更重建） */
+  private historyStore?: ChatHistoryStore;
+  private historyStoreKey = '';
+
+  private constructor() {}
+
+  // ===================================================================
+  //  事件入口
+  // ===================================================================
+
+  /** message-event-group 钩子 */
+  public handleGroupMessage(bot: QQBot, msg: GroupMessageWSMSG): void {
+    this.handleMessageSafe(bot, msg).catch(error => {
+      bot.logger?.error(`[Hermes] 群消息处理失败: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+    });
+  }
+
+  /** message-event-private 钩子 */
+  public handlePrivateMessage(bot: QQBot, msg: PrivateMessageWSMSG): void {
+    this.handleMessageSafe(bot, msg).catch(error => {
+      bot.logger?.error(`[Hermes] 私聊消息处理失败: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+    });
+  }
+
+  // ===================================================================
+  //  访问控制与触发
+  // ===================================================================
+
+  /** 检查用户是否有权与 Bot 对话 */
+  private canChat(route: RouteInfo): boolean {
+    const config = getHermesConfig();
+    const uid = Number(route.userId);
+    if (config.blockedUsers.includes(uid)) return false;
+    if (config.allowedUsers.length > 0 && !config.allowedUsers.includes(uid) && !isHermesAdmin(uid)) return false;
+    if (route.type === 'group' && !config.groups.includes(Number(route.groupId))) return false;
+    return true;
+  }
+
+  /** 检查是否 @了 Bot */
+  private hasAtSelf(message: ReceiveMessage): boolean {
+    if (!Array.isArray(message)) return false;
+    const selfId = this.bot?.getLoginInfoSync()?.user_id;
+    if (selfId === undefined) return false;
+    return message.some(segment => segment.type === 'at' && String(segment.data.qq) === String(selfId));
+  }
+
+  /** 提取消息中的纯文本 */
+  private extractText(message: ReceiveMessage | string): string {
+    if (typeof message === 'string') return message;
+    if (!Array.isArray(message)) return '';
+    return message
+      .filter(segment => segment.type === 'text')
+      .map(segment => (segment.type === 'text' ? segment.data.text : ''))
+      .join('')
+      .trim();
+  }
+
+  /** 发送者展示名：群名片（昵称）或昵称或 QQ 号 */
+  private senderLabel(sender: { card?: string; nickname?: string }, userId: string): string {
+    const card = sender.card?.trim();
+    const nick = sender.nickname?.trim();
+    const name = card && nick && card !== nick ? `${card}（${nick}）` : card || nick || userId;
+    return `${name} (${userId})`;
+  }
+
+  // ===================================================================
+  //  会话管理
+  // ===================================================================
+
+  private get store(): ChatHistoryStore {
+    const config = getHermesConfig();
+    const key = `${config.persistHistoryMax}:${config.persistHistoryEnabled}`;
+    if (!this.historyStore || this.historyStoreKey !== key) {
+      this.historyStore = new ChatHistoryStore(config.persistHistoryMax, config.persistHistoryEnabled);
+      this.historyStoreKey = key;
+    }
+    return this.historyStore;
+  }
+
+  /** 获取会话键（群聊按群共享，私聊按人隔离） */
+  private getSessionKey(route: RouteInfo): string {
+    return route.type === 'group' ? `group:${route.groupId}` : `user:${route.userId}`;
+  }
+
+  /** 获取或创建会话（优先从持久化存储恢复） */
+  private getSession(key: string): Session {
+    if (!this.sessions.has(key)) {
+      this.sessions.set(key, { history: this.store.load(key), sessionVersion: 0 });
+    }
+    return this.sessions.get(key)!;
+  }
+
+  /** 清除会话上下文（内存 + 持久化） */
+  private clearSession(route: RouteInfo): number {
+    const baseKey = this.getSessionKey(route);
+    const session = this.sessions.get(baseKey);
+    if (session) {
+      session.sessionVersion = (session.sessionVersion || 0) + 1;
+      session.history = [];
+    }
+    this.store.clear(baseKey);
+    return session?.sessionVersion || 0;
+  }
+
+  /** 追加历史消息（内存 + 持久化），跳过空内容 */
+  private appendHistory(key: string, role: string, content: string, userId?: string): void {
+    if (!content.trim()) return;
+    const config = getHermesConfig();
+    const session = this.getSession(key);
+    session.history.push({ role, content, ...(userId !== undefined ? { userId } : {}) });
+    const max = config.localHistoryMaxMessages * 2;
+    if (session.history.length > max) {
+      session.history = session.history.slice(-max);
+    }
+    this.store.save(key, session.history);
+  }
+
+  // ===================================================================
+  //  OneBot API（QQBot 未封装的少量接口，经 HTTP API 直接调用）
+  // ===================================================================
+
+  private async callApi<T>(action: string, params: Record<string, unknown>): Promise<T> {
+    if (!this.bot) throw new Error('bot 未就绪');
+    const res = await this.bot.axiosInstance.post(`/${action}`, params);
+    const payload = res.data as { retcode?: number; msg?: string; wording?: string; data?: T };
+    if (payload?.retcode !== 0) {
+      throw new Error(`API 错误 ${payload?.retcode}: ${payload?.msg || payload?.wording || ''}`);
+    }
+    return payload?.data as T;
+  }
+
+  /** 技能执行用的群管理 API 门面 */
+  private groupAdminApi(): GroupAdminApi {
+    return {
+      setGroupBan: (groupId, userId, durationSec) =>
+        this.callApi('set_group_ban', { group_id: Number(groupId), user_id: Number(userId), duration: durationSec }),
+      setGroupKick: (groupId, userId) =>
+        this.callApi('set_group_kick', { group_id: Number(groupId), user_id: Number(userId), reject_add_request: false }),
+      setGroupWholeBan: (groupId, enable) =>
+        this.callApi('set_group_whole_ban', { group_id: Number(groupId), enable })
+    };
+  }
+
+  /** 解析群成员名称（群名片 → QQ 昵称 → QQ 号），带缓存 */
+  private async resolveMemberName(groupId: string | number, userId: string | number): Promise<string | null> {
+    const key = `${groupId}:${userId}`;
+    if (this.memberCache.has(key)) return this.memberCache.get(key)!;
+    try {
+      const info = await this.callApi<OneBotGroupMemberInfo>('get_group_member_info', {
+        group_id: Number(groupId),
+        user_id: Number(userId)
+      });
+      const name = info.card || info.nickname || String(userId);
+      this.memberCache.set(key, name);
+      return name;
+    } catch {
+      return null;
+    }
+  }
+
+  // ===================================================================
+  //  消息发送
+  // ===================================================================
+
+  /** 发送文本回复（超长按 maxMessageLength 切分） */
+  private async sendReply(route: RouteInfo, text: string): Promise<void> {
+    if (!this.bot) return;
+    const chunks = splitMessageText(text, getHermesConfig().maxMessageLength);
+    for (const chunk of chunks) {
+      if (route.type === 'group') {
+        await this.bot.sendGroupMsg(route.groupId!, [{ type: 'text', data: { text: chunk } }]);
+      } else {
+        await this.bot.sendPrivateMsg(route.userId, [{ type: 'text', data: { text: chunk } }]);
+      }
+    }
+  }
+
+  /** 发送带引用的文本回复（群聊回复原消息，私聊退化为普通发送） */
+  private async sendReplyWithMention(route: RouteInfo, text: string, userMsgId: number): Promise<void> {
+    if (!this.bot) return;
+    if (route.type === 'group' && userMsgId) {
+      const chunks = splitMessageText(text, getHermesConfig().maxMessageLength);
+      for (const chunk of chunks) {
+        await this.bot.sendGroupMsg(route.groupId!, [
+          { type: 'reply', data: { id: userMsgId } },
+          { type: 'text', data: { text: chunk } }
+        ]);
+      }
+      return;
+    }
+    await this.sendReply(route, text);
+  }
+
+  /** 发送图片（base64，允许已带 base64:// 前缀） */
+  private async sendReplyImage(route: RouteInfo, imageData: string): Promise<void> {
+    if (!this.bot) return;
+    const file = imageData.startsWith('base64://') ? imageData : `base64://${imageData}`;
+    try {
+      if (route.type === 'group') {
+        await this.bot.sendGroupMsg(route.groupId!, [{ type: 'image', data: { file } }]);
+      } else {
+        await this.bot.sendPrivateMsg(route.userId, [{ type: 'image', data: { file } }]);
+      }
+    } catch (error) {
+      this.bot.logger?.error(`[Hermes] 图片发送失败: ${(error as Error).message}，回退到文字`);
+    }
+  }
+
+  // ===================================================================
+  //  图片处理（Hermes 多模态输入 / MEDIA 标签输出）
+  // ===================================================================
+
+  /** 下载远程图片并编码为 base64:// */
+  private async downloadImageToBase64(imageUrl: string): Promise<string> {
+    const resp = await fetch(imageUrl);
+    if (!resp.ok) throw new Error(`下载失败: ${resp.status}`);
+    return `base64://${Buffer.from(await resp.arrayBuffer()).toString('base64')}`;
+  }
+
+  /** 下载远程图片并转成 base64 data URL（Hermes 多模态输入用） */
+  private async downloadImageToDataUrl(imageUrl: string): Promise<string> {
+    const resp = await fetch(imageUrl);
+    if (!resp.ok) throw new Error(`下载失败: ${resp.status}`);
+    const buffer = Buffer.from(await resp.arrayBuffer());
+    const contentType = (resp.headers.get('content-type') || '').split(';')[0]!.trim();
+    const mime = /^image\//i.test(contentType) ? contentType : mimeFromPath(imageUrl);
+    return `data:${mime};base64,${buffer.toString('base64')}`;
+  }
+
+  /**
+   * 解析图片段为 base64 data URL，全部转为 base64 后传给 Hermes。
+   * 优先下载 CDN url / http(s) file，否则读取本地文件。
+   * 失败时返回 null（仅保留 [图片] 占位符）。
+   */
+  private async resolveImageDataUrl(segment: { data: { file: string; url?: string } }): Promise<string | null> {
+    const { url, file } = segment.data || {};
+    const remote = url || (file && /^https?:\/\//i.test(file) ? file : '');
+    if (remote) {
+      try {
+        return await this.downloadImageToDataUrl(remote);
+      } catch (error) {
+        this.bot?.logger?.error(`[Hermes] 图片下载失败 ${remote}: ${(error as Error).message}`);
+      }
+    }
+    if (file && !/^https?:\/\//i.test(file)) {
+      try {
+        const buffer = fs.readFileSync(file);
+        return `data:${mimeFromPath(file)};base64,${buffer.toString('base64')}`;
+      } catch (error) {
+        this.bot?.logger?.error(`[Hermes] 图片本地文件读取失败 ${file}: ${(error as Error).message}`);
+      }
+    }
+    return null;
+  }
+
+  /** 将消息段转为文本（用于引用/转发内容），图片段转为 [图片] 并收集图片 */
+  private async segmentsToText(segments: Message[] | string, images: string[]): Promise<string> {
+    if (typeof segments === 'string') return segments;
+    if (!Array.isArray(segments)) return '';
+    const config = getHermesConfig();
+    const parts: string[] = [];
+    for (const segment of segments) {
+      switch (segment.type) {
+        case 'text':
+          parts.push(segment.data.text);
+          break;
+        case 'at':
+          parts.push(String(segment.data.qq) === 'all' ? '@全体成员' : `@${segment.data.qq}`);
+          break;
+        case 'image': {
+          parts.push('[图片]');
+          if (config.forwardImages) {
+            const url = await this.resolveImageDataUrl(segment);
+            if (url) images.push(url);
+          }
+          break;
+        }
+        case 'video':
+          parts.push('[视频]');
+          break;
+        case 'record':
+          parts.push('[语音]');
+          break;
+        default:
+          break;
+      }
+    }
+    return parts.join('').trim();
+  }
+
+  // ===================================================================
+  //  进度跟踪
+  // ===================================================================
+
+  /** 格式化毫秒为可读时长 */
+  private formatElapsed(ms: number): string {
+    if (ms < 1000) return `${ms}ms`;
+    if (ms < 60000) return `${(ms / 1000).toFixed(0)}s`;
+    return `${Math.floor(ms / 60000)}m${Math.round((ms % 60000) / 1000)}s`;
+  }
+
+  /** 检查是否应发送进度更新 */
+  private shouldSendProgress(run: RunState): boolean {
+    if (run.sendingProgress) return false;
+    const elapsed = (Date.now() - run.lastProgressSent) / 1000;
+    return elapsed >= getHermesConfig().progressRateLimitSec;
+  }
+
+  /** 发送进度卡片（渲染失败降级纯文本） */
+  private async sendProgressCard(runId: string): Promise<void> {
+    const run = this.activeRuns.get(runId);
+    if (!run || run.sendingProgress) return;
+    run.sendingProgress = true;
+
+    const now = Date.now();
+    const elapsed = this.formatElapsed(now - run.startedAt);
+
+    try {
+      const image = await renderProgressImage({
+        tools: run.tools,
+        currentTool: run.currentTool,
+        messageDelta: run.pendingText || run.messageDelta,
+        elapsed
+      });
+      if (image) {
+        await this.sendReplyImage(run.route, image);
+        run.lastProgressSent = now;
+        return;
+      }
+
+      // 文字回退
+      const lines: string[] = [`⏳ Hermes 执行中 (${elapsed})`];
+      for (const tool of run.tools.slice(-8)) {
+        const icon = tool.error ? '❌' : '✅';
+        const duration = tool.duration ? ` (${this.formatElapsed(tool.duration)})` : '';
+        const preview = tool.preview ? ` → ${tool.preview.slice(0, 80)}` : '';
+        lines.push(`${icon} ${tool.name}${duration}${preview}`);
+      }
+      if (run.currentTool) {
+        const preview = run.currentTool.preview ? ` → ${run.currentTool.preview.slice(0, 80)}` : '';
+        lines.push(`⏳ ${run.currentTool.name}...${preview}`);
+      }
+      await this.sendReply(run.route, lines.join('\n'));
+      run.lastProgressSent = now;
+    } finally {
+      run.sendingProgress = false;
+    }
+  }
+
+  // ===================================================================
+  //  消息格式化（富文本 → AI 可理解的文本 + 图片）
+  // ===================================================================
+
+  /** 格式化 Unix 时间戳 */
+  private formatTime(unixTs: number): string {
+    const date = new Date(unixTs * 1000);
+    const pad = (value: number) => String(value).padStart(2, '0');
+    return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  }
+
+  /**
+   * 将 OneBot 消息转换为 AI 可理解的富文本格式：
+   * 文本 → 原文；@提及 → @昵称(QQ)；图片 → [图片] + 原图（forwardImages 可关）；
+   * 视频/语音 → 占位符；回复引用 → 引用块（含原消息图片）；合并转发 → 逐条引用块。
+   */
+  private async formatMessage(
+    message: ReceiveMessage | string,
+    groupId: number | undefined
+  ): Promise<FormattedMessage> {
+    if (typeof message === 'string') return { text: message, images: [] };
+    if (!Array.isArray(message)) return { text: '', images: [] };
+    const config = getHermesConfig();
+
+    // 收集所有需要解析昵称的 @提及，并行查询群成员昵称
+    const atQqs: string[] = [];
+    for (const segment of message) {
+      if (segment.type === 'at' && segment.data.qq && String(segment.data.qq) !== 'all') {
+        const qq = String(segment.data.qq);
+        if (!atQqs.includes(qq)) atQqs.push(qq);
+      }
+    }
+    const nameMap = new Map<string, string>();
+    if (atQqs.length > 0 && groupId !== undefined) {
+      const results = await Promise.all(atQqs.map(qq => this.resolveMemberName(groupId, qq).catch(() => null)));
+      atQqs.forEach((qq, index) => {
+        const name = results[index];
+        if (name) nameMap.set(qq, name);
+      });
+    }
+
+    const parts: string[] = [];
+    const images: string[] = [];
+
+    for (const segment of message) {
+      switch (segment.type) {
+        case 'text':
+          parts.push(segment.data.text);
+          break;
+        case 'at': {
+          const qq = String(segment.data.qq);
+          if (qq === 'all') {
+            parts.push('@全体成员');
+          } else {
+            const name = nameMap.get(qq) || qq || '未知';
+            parts.push(`@${name}(${qq})`);
+          }
+          break;
+        }
+        case 'image': {
+          parts.push('[图片]');
+          if (config.forwardImages) {
+            const url = await this.resolveImageDataUrl(segment);
+            if (url) images.push(url);
+          }
+          break;
+        }
+        case 'video':
+          parts.push('[视频]');
+          break;
+        case 'record':
+          parts.push('[语音]');
+          break;
+        case 'reply': {
+          const repliedMsgId = segment.data.id;
+          if (repliedMsgId) {
+            try {
+              const original = await this.callApi<OneBotGetMsgResponse>('get_msg', {
+                message_id: Number(repliedMsgId)
+              });
+              if (original) {
+                const senderName = original.sender?.nickname || '未知';
+                const senderId = original.sender?.user_id || '';
+                const time = this.formatTime(original.time);
+                const content = await this.segmentsToText(original.message, images);
+                parts.push(`> ${senderName}(${senderId}) ${time}\n> ${content}\n`);
+              }
+            } catch {
+              parts.push('> [引用消息获取失败]\n');
+            }
+          }
+          break;
+        }
+        case 'forward': {
+          const forwardId = (segment as ForwardMessage).data.id;
+          if (forwardId) {
+            try {
+              const forward = await this.callApi<OneBotGetForwardMsgResponse>('get_forward_msg', {
+                message_id: forwardId
+              });
+              for (const node of forward.messages || []) {
+                // NapCat 节点格式: {type:"node", data:{...}}；go-cqhttp / OneBot v11 旧格式: {sender, time, content}
+                const merged = (node.type === 'node' ? node.data : node) as OneBotForwardNode['data'] & {
+                  sender?: { user_id?: number; nickname?: string; card?: string };
+                };
+                const nodeSegments = merged?.message?.length ? merged.message : merged?.content || [];
+                const nodeName =
+                  merged?.nickname || merged?.card || merged?.sender?.nickname || String(merged?.user_id ?? '未知');
+                const nodeId = String(merged?.user_id ?? merged?.sender?.user_id ?? '');
+                const nodeTime = merged?.time ? this.formatTime(merged.time) : '';
+                const content = await this.segmentsToText(nodeSegments, images);
+                parts.push(`> ${nodeName}(${nodeId}) ${nodeTime}\n> ${content}\n`);
+              }
+            } catch {
+              parts.push('> [转发消息获取失败]\n');
+            }
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    }
+
+    return { text: parts.join('').trim(), images };
+  }
+
+  // ===================================================================
+  //  消息处理主入口
+  // ===================================================================
+
+  private async handleMessageSafe(bot: QQBot, msg: GroupMessageWSMSG | PrivateMessageWSMSG): Promise<void> {
+    // 防自环：NapCat 配置回报自身消息时直接忽略
+    if (msg.user_id === msg.self_id) return;
+    this.bot = bot;
+
+    const route: RouteInfo =
+      msg.message_type === 'group'
+        ? { type: 'group', groupId: String(msg.group_id), userId: String(msg.sender.user_id) }
+        : { type: 'user', userId: String(msg.sender.user_id) };
+
+    if (!this.canChat(route)) return;
+
+    const config = getHermesConfig();
+    const rawText = this.extractText(msg.message);
+
+    // 触发判定：私聊始终触发；群聊按 @提及/关键词/requireMention（含命令守卫）
+    let triggered = true;
+    let reason = 'private';
+    if (route.type === 'group') {
+      const decision = decideGroupTrigger({
+        text: rawText,
+        mentioned: this.hasAtSelf(msg.message),
+        requireMention: config.requireMention,
+        keywordTriggers: config.keywordTriggers
+      });
+      triggered = decision.triggered;
+      reason = decision.reason ?? '';
+
+      if (!triggered) {
+        // 未触发但群聊消息仍需记录到背景上下文（供 AI 感知群聊氛围）
+        if (rawText) {
+          this.appendHistory(this.getSessionKey(route), 'user', `${this.senderLabel(msg.sender, route.userId)}: ${rawText}`, route.userId);
+        }
+        return;
+      }
+    }
+
+    bot.logger?.info(`[Hermes] 触发: ${reason} from ${route.userId} in ${route.type}:${route.groupId || route.userId}`);
+
+    const formatted = await this.formatMessage(msg.message, msg.message_type === 'group' ? msg.group_id : undefined);
+    const text = formatted.text;
+    if (!text) return;
+
+    // 审批回复检测
+    if (await this.handleApprovalReply(route, text, msg.message_id)) return;
+
+    // 停止命令
+    if (isStopCommand(text)) {
+      await this.handleStopCommand(route);
+      return;
+    }
+
+    // 清除上下文命令
+    if (isResetCommand(text)) {
+      const newVersion = this.clearSession(route);
+      await this.sendReplyWithMention(route, `✅ 上下文已清除，开始新对话 (v${newVersion})`, msg.message_id);
+      return;
+    }
+
+    // 构建用户提示词
+    const senderLabel = this.senderLabel(msg.sender, route.userId);
+    const userPrompt = route.type === 'group' ? `${senderLabel}: ${text}` : text;
+    // 带图消息：组装 OpenAI 多模态内容段，将原图传给 Hermes
+    const userMessage: string | MessageContentPart[] =
+      formatted.images.length > 0
+        ? [
+            { type: 'text', text: userPrompt },
+            ...formatted.images.map((url): MessageContentPart => ({ type: 'image_url', image_url: { url } }))
+          ]
+        : userPrompt;
+
+    const sessionKey = this.getSessionKey(route);
+    const session = this.getSession(sessionKey);
+    const sessionVersion = session.sessionVersion || 0;
+    // Hermes sessionId 按人区分；群聊日志仍按群共享
+    const hermesSessionBase = route.type === 'group' ? `group_${route.groupId}_user_${route.userId}` : `user_${route.userId}`;
+    const hermesSessionId = sessionVersion > 0 ? `${hermesSessionBase}:v${sessionVersion}` : hermesSessionBase;
+
+    const historyContent = route.type === 'group' ? `${senderLabel}: ${text}` : text;
+    this.appendHistory(sessionKey, 'user', historyContent, route.userId);
+
+    // 组装系统提示词：configs/SOUL.md > systemPrompt > 空 + 群聊上下文 + 技能列表
+    const baseSystem = this.loadSoulPrompt() || config.systemPrompt || '';
+    const groupContext =
+      route.type === 'group'
+        ? `你正在 QQ 群 ${route.groupId} 中。群聊有多个成员，不同 QQ 号代表不同的人，请根据发送者标识区分。回复请简短口语化，符合 QQ 聊天风格。`
+        : '';
+    const skillsPrompt = this.skillManager.buildPrompt();
+    const systemPrompt = [baseSystem, groupContext, skillsPrompt].filter(Boolean).join('\n\n') || undefined;
+
+    try {
+      const { runId } = await this.hermes.submitRun({
+        userMessage,
+        sessionId: hermesSessionId,
+        ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+        conversationHistory: session.history.slice(0, -1)
+      });
+
+      bot.logger?.info(`[Hermes] run 已提交: ${runId}`);
+
+      const runState: RunState = {
+        route,
+        tools: [],
+        currentTool: null,
+        startedAt: Date.now(),
+        lastProgressSent: 0,
+        sendingProgress: false,
+        messageDelta: '',
+        pendingText: '',
+        sentTextLength: 0,
+        lastTextSent: 0,
+        finalOutput: '',
+        userMsgId: msg.message_id
+      };
+      this.activeRuns.set(runId, runState);
+
+      // 流式输出：工具调用前后自动 flush 中间文本
+      const flushPendingText = async () => {
+        const pending = runState.pendingText.trim();
+        if (!pending) return;
+        runState.pendingText = '';
+        runState.sentTextLength = runState.messageDelta.length;
+        runState.lastTextSent = Date.now();
+        try {
+          await this.sendReply(runState.route, pending);
+        } catch (error) {
+          this.bot?.logger?.error(`[Hermes] 文本发送错误: ${(error as Error).message}`);
+        }
+      };
+
+      const stream = this.hermes.streamEvents(runId, {
+        'tool.started': ev => {
+          void flushPendingText();
+          runState.currentTool = {
+            name: ev.tool,
+            ...(ev.preview !== undefined ? { preview: ev.preview } : {}),
+            startedAt: ev.timestamp * 1000
+          };
+        },
+
+        'tool.completed': ev => {
+          runState.tools.push({
+            name: ev.tool,
+            duration: (ev.duration || 0) * 1000,
+            error: ev.error || false,
+            ...(runState.currentTool?.preview !== undefined ? { preview: runState.currentTool.preview } : {})
+          });
+          runState.currentTool = null;
+          void flushPendingText();
+        },
+
+        'message.delta': ev => {
+          runState.messageDelta += ev.delta || '';
+          runState.pendingText += ev.delta || '';
+
+          if (this.shouldSendProgress(runState) && runState.tools.length > 0) {
+            this.sendProgressCard(runId).catch(error =>
+              this.bot?.logger?.error(`[Hermes] 进度发送错误: ${(error as Error).message}`)
+            );
+          }
+        },
+
+        'approval.request': ev => {
+          this.handleApprovalRequest(runId, ev);
+        },
+
+        'run.completed': ev => {
+          runState.finalOutput = ev.output || '';
+        },
+
+        'run.failed': ev => {
+          runState.finalOutput = `❌ 执行失败: ${ev.error || '未知错误'}`;
+        },
+
+        _end: () => {
+          void this.handleRunComplete(runId);
+        },
+
+        _error: () => {
+          void this.handleRunComplete(runId);
+        }
+      });
+
+      runState.stream = stream;
+    } catch (error) {
+      bot.logger?.error(`[Hermes] 提交错误: ${(error as Error).message}`);
+      await this.sendReplyWithMention(route, `❌ 调用 Hermes 失败: ${(error as Error).message}`, msg.message_id);
+    }
+  }
+
+  /** 读取 configs/SOUL.md 作为系统提示词（每次触发时读取，编辑免重启） */
+  private loadSoulPrompt(): string {
+    try {
+      const soulPath = path.resolve(process.cwd(), 'configs', 'SOUL.md');
+      if (fs.existsSync(soulPath)) return fs.readFileSync(soulPath, 'utf-8').trim();
+    } catch {
+      // 读取失败按无 SOUL.md 处理
+    }
+    return '';
+  }
+
+  // ===================================================================
+  //  运行完成处理
+  // ===================================================================
+
+  /** 处理运行完成：发送最终回复，执行技能标签，处理 MEDIA 标签 */
+  private async handleRunComplete(runId: string): Promise<void> {
+    const run = this.activeRuns.get(runId);
+    if (!run) return;
+    this.activeRuns.delete(runId);
+    this.pendingApprovals.delete(runId);
+    this.approvalMessageSent.delete(runId);
+
+    let output = run.finalOutput || run.messageDelta;
+
+    // 如果中间已经发过文本，通过与 messageDelta 比对找出未发送的剩余部分
+    if (run.sentTextLength > 0 && run.messageDelta && output) {
+      const unsentFromDelta = run.messageDelta.slice(run.sentTextLength).trim();
+      if (unsentFromDelta) {
+        output = unsentFromDelta;
+      } else if (output.length > run.sentTextLength) {
+        output = output.slice(run.sentTextLength).trim();
+      } else {
+        return; // 全部已发送
+      }
+    }
+
+    // 运行没有任何输出（SSE 连接失败 / 模型错误等），通知用户并记录空回复占位
+    if (!output?.trim()) {
+      const errorMsg = '❌ 执行失败：未收到 Hermes 响应，请稍后重试';
+      this.appendHistory(this.getSessionKey(run.route), 'assistant', errorMsg);
+      await this.sendReplyWithMention(run.route, errorMsg, run.userMsgId).catch(() => {});
+      return;
+    }
+
+    // 执行技能标签
+    output = await this.skillManager.processTags(output, run.route, {
+      api: this.groupAdminApi(),
+      isAdmin: userId => isHermesAdmin(Number(userId))
+    });
+    this.appendHistory(this.getSessionKey(run.route), 'assistant', output);
+
+    // 解析 MEDIA: 标签，发送图片
+    const mediaRegex = /MEDIA:((?:\/|https?:\/\/)[^\s\n]+)/g;
+    const mediaPaths: string[] = [];
+    let match: RegExpExecArray | null;
+    while ((match = mediaRegex.exec(output)) !== null) {
+      mediaPaths.push(match[1]!);
+    }
+    const remainingText = output.replace(/MEDIA:(?:\/|https?:\/\/)[^\s\n]+/g, '').trim();
+
+    for (const mediaPath of mediaPaths) {
+      try {
+        const imageData =
+          mediaPath.startsWith('http://') || mediaPath.startsWith('https://')
+            ? await this.downloadImageToBase64(mediaPath)
+            : `base64://${fs.readFileSync(mediaPath).toString('base64')}`;
+        await this.sendReplyImage(run.route, imageData);
+      } catch (error) {
+        this.bot?.logger?.error(`[Hermes] 图片发送失败 ${mediaPath}: ${(error as Error).message}`);
+      }
+    }
+
+    if (remainingText) {
+      await this.sendReplyWithMention(run.route, remainingText, run.userMsgId);
+    }
+  }
+
+  // ===================================================================
+  //  停止命令
+  // ===================================================================
+
+  /** 处理停止命令 */
+  private async handleStopCommand(route: RouteInfo): Promise<void> {
+    for (const [runId, run] of this.activeRuns) {
+      if (
+        (route.type === 'group' && run.route.groupId === route.groupId) ||
+        (route.type === 'user' && run.route.userId === route.userId)
+      ) {
+        await this.hermes.stopRun(runId);
+        await this.sendReply(route, '已停止当前任务 ✋');
+        return;
+      }
+    }
+    await this.sendReply(route, '当前没有正在运行的任务');
+  }
+
+  // ===================================================================
+  //  审批处理
+  // ===================================================================
+
+  /** 处理审批请求 */
+  private handleApprovalRequest(runId: string, ev: HermesApprovalEvent): void {
+    const config = getHermesConfig();
+    if (!config.approvalEnabled) return;
+
+    const run = this.activeRuns.get(runId);
+    if (!run) return;
+
+    // 防止同一 run 重复发送审批消息（仍更新待审批数据，工具可能被多次调用）
+    if (this.approvalMessageSent.has(runId)) {
+      this.pendingApprovals.set(runId, { runId, route: run.route, data: ev, createdAt: Date.now() });
+      return;
+    }
+
+    const route = run.route;
+    const command = ev.command || '未知命令';
+    const patternKey = ev.pattern_key || '';
+
+    const riskLevel = /rm|delete|sudo|chmod|chown|kill|reboot|shutdown/.test(patternKey)
+      ? 'high'
+      : /curl|wget|pip|npm|apt|docker/.test(patternKey)
+        ? 'medium'
+        : 'low';
+
+    const approval: Approval = { runId, route, data: ev, createdAt: Date.now() };
+    this.pendingApprovals.set(runId, approval);
+    this.approvalMessageSent.set(runId, true);
+
+    if (config.approvalTimeoutSec > 0) {
+      approval.timeoutTimer = setTimeout(() => {
+        void (async () => {
+          if (this.pendingApprovals.has(runId)) {
+            this.pendingApprovals.delete(runId);
+            this.approvalMessageSent.delete(runId);
+            try {
+              await this.hermes.resolveApproval(runId, 'deny');
+              await this.sendReply(route, `⏱️ 审批超时，已自动拒绝: ${command.slice(0, 100)}`);
+            } catch {
+              // 忽略
+            }
+          }
+        })();
+      }, config.approvalTimeoutSec * 1000);
+    }
+
+    this.sendApprovalCard(runId, command, riskLevel).catch(error =>
+      this.bot?.logger?.error(`[Hermes] 审批卡片错误: ${(error as Error).message}`)
+    );
+  }
+
+  /** 发送审批卡片（渲染失败降级纯文本） */
+  private async sendApprovalCard(runId: string, command: string, riskLevel: string): Promise<void> {
+    const approval = this.pendingApprovals.get(runId);
+    if (!approval) return;
+
+    const route = approval.route;
+    const ev = approval.data;
+
+    const image = await renderApprovalImage({
+      command,
+      riskLevel,
+      toolName: ev.pattern_key || '',
+      runId,
+      preview: ev.description || ''
+    });
+
+    if (image) {
+      await this.sendReplyImage(route, image);
+      await this.sendReply(route, `⚠️ 上方命令需要审批。回复 "批准" / "拒绝" / "本次允许" / "始终允许" 来处理。`);
+      return;
+    }
+
+    const toolName = ev.pattern_key || '';
+    const preview = ev.description || '';
+    const lines = [
+      `⚠️ 需要审批`,
+      toolName ? `模式: ${toolName}` : '',
+      `命令: ${command.slice(0, 300)}`,
+      preview ? `说明: ${preview.slice(0, 200)}` : '',
+      riskLevel === 'high' ? `风险: 🔴 高` : riskLevel === 'medium' ? `风险: 🟡 中` : `风险: 🔵 低`,
+      '',
+      `回复 "批准" / "拒绝" / "本次允许" / "始终允许" 来处理`,
+      `(run: ${runId.slice(-8)})`
+    ].filter(Boolean);
+    await this.sendReply(route, lines.join('\n'));
+  }
+
+  /** 处理审批回复（命中返回 true 表示该消息已作为审批处理） */
+  private async handleApprovalReply(route: RouteInfo, text: string, msgId: number): Promise<boolean> {
+    for (const [runId, approval] of this.pendingApprovals) {
+      const approvalRoute = approval.route;
+      if (
+        (route.type === 'group' && approvalRoute.groupId === route.groupId) ||
+        (route.type === 'user' && approvalRoute.userId === route.userId)
+      ) {
+        const choice: ApprovalChoice | null = parseApprovalChoice(text);
+        if (!choice) return false;
+
+        // 仅管理员可审批
+        if (!isHermesAdmin(Number(route.userId))) {
+          await this.sendReplyWithMention(route, '❌ 只有管理员可以审批操作', msgId);
+          return true;
+        }
+
+        if (approval.timeoutTimer) clearTimeout(approval.timeoutTimer);
+        this.pendingApprovals.delete(runId);
+        this.approvalMessageSent.delete(runId);
+
+        try {
+          await this.hermes.resolveApproval(runId, choice);
+          const labels: Record<ApprovalChoice, string> = {
+            once: '已批准（一次）✅',
+            deny: '已拒绝 ❌',
+            always: '已设置始终允许 ♾️',
+            session: '已允许本次会话 ✅'
+          };
+          await this.sendReplyWithMention(route, labels[choice], msgId);
+        } catch (error) {
+          await this.sendReply(route, `审批处理失败: ${(error as Error).message}`);
+        }
+
+        return true;
+      }
+    }
+    return false;
+  }
+}

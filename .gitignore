@@ -6,6 +6,7 @@ node_modules/
 /.dsh/
 logs/
 git/
+/data/
 /config/
 /configs/
 reference/

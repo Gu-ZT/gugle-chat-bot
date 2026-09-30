@@ -5,7 +5,8 @@ import {
   GroupMessageWSMSG,
   GroupRequestWSMSG,
   Message,
-  NotifyNoticeWSMSG
+  NotifyNoticeWSMSG,
+  PrivateMessageWSMSG
 } from '@/type';
 import { ParenthesesMatching } from '@/features/parentheses';
 import { Github } from '@/features/github';
@@ -28,6 +29,7 @@ import { Management } from '@/features/management';
 import { Welcome } from '@/features/welcome';
 import { PeakValleyTimer } from '@/features/peak-valley-timer';
 import { DiscordBridge } from '@/features/discord-bridge';
+import { HermesBridge } from '@/features/hermes';
 
 class CustomBot {
   private static readonly peakValleyTimer: PeakValleyTimer = PeakValleyTimer.getInstance();
@@ -277,6 +279,18 @@ ${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings 
   public listenDiscordBridgeMsg(bot: QQBot, msg: GroupMessageWSMSG): void {
     // QQ ⇄ Discord 互通：转发与 /send 分发（不依赖 command 白名单，内部自行门控）
     DiscordBridge.getInstance().handleQQMessage(bot, msg);
+  }
+
+  @bot.subscribe('message-event-group', false)
+  public listenHermesGroupMsg(bot: QQBot, msg: GroupMessageWSMSG): void {
+    // QQ ⇄ Hermes Agent 桥接：@提及/关键词触发 AI 对话（内部自行门控：hermes.json groups）
+    HermesBridge.getInstance().handleGroupMessage(bot, msg);
+  }
+
+  @bot.subscribe('message-event-private', false)
+  public listenHermesPrivateMsg(bot: QQBot, msg: PrivateMessageWSMSG): void {
+    // Hermes 私聊始终可触发（受 hermes.json 用户黑白名单约束）
+    HermesBridge.getInstance().handlePrivateMessage(bot, msg);
   }
 
   @bot.subscribe('notice-event-group-decrease', false)
