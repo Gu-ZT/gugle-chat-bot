@@ -156,8 +156,8 @@ export class DiscordBridge {
   private bot?: QQBot;
   private started = false;
 
-  /** QQ 消息 id → Discord 消息 id */
-  private readonly discordByQQ = new BoundedCache<string>();
+  /** QQ 消息 id →（bridge key → Discord 消息 id）：同群多频道时每个频道各有自己的转发，回复引用必须按频道取 */
+  private readonly discordByQQ = new BoundedCache<Record<string, string>>();
   /** Discord 消息 id → QQ 消息 id */
   private readonly qqByDiscord = new BoundedCache<number>();
   /** 本桥转发到 QQ 的消息 id（回复链 & need_reply/need_cmd 判定） */
@@ -377,19 +377,14 @@ export class DiscordBridge {
     const rendered = isDiscordMarkdown(text) ? text : escapeDiscord(text);
     const content = this.truncateDiscord(text ? `${header}\n${rendered}` : header);
 
-    const referenceId = replyId !== undefined ? this.discordByQQ.get(replyId) : undefined;
+    const referenceId = replyId !== undefined ? this.discordByQQ.get(replyId)?.[bridge.key] : undefined;
     // 附件由 bot 下载为 Buffer 上传（避免 Discord 服务器抓取 NapCat 防盗链直链失败/拿到非图片响应），
     // 并按字节内容修正扩展名，保证图片在 Discord 内嵌渲染
     const files = (
       await Promise.all(attachments.map(item => this.fetchAttachment(bot, item)))
     ).filter((item): item is { attachment: Buffer; name: string } => item !== undefined);
-    const sent = await channel.send({
-      content,
-      ...(referenceId ? { reply: { messageReference: referenceId } } : {}),
-      allowedMentions: { parse: [], repliedUser: false },
-      files
-    });
-    this.registerDiscordMessage(sent.id, msg.message_id, viaCommand);
+    const sent = await this.sendWithReference(channel, { content, files }, referenceId);
+    this.registerDiscordMessage(sent.id, msg.message_id, bridge.key, viaCommand);
     bot.logger?.debug(`[DiscordBridge] QQ→Discord：${msg.group_id} → ${bridge.key}（${sent.id}）`);
   }
 
@@ -474,26 +469,45 @@ export class DiscordBridge {
 
     const rendered = isDiscordMarkdown(text) ? text : escapeDiscord(text);
     const content = this.truncateDiscord(text ? `${header}\n${rendered}` : header);
-    const referenceId = replyQQId !== undefined ? this.discordByQQ.get(replyQQId) : undefined;
 
     for (const bridge of bridges) {
       const channel = await this.resolveDiscordChannel(bridge);
       if (!channel) continue;
       try {
-        const sent = await channel.send({
-          content,
-          ...(referenceId ? { reply: { messageReference: referenceId } } : {}),
-          allowedMentions: { parse: [], repliedUser: false },
-          files
-        });
+        // 回复引用按频道各自的转发映射取（同群多频道时同一 QQ 消息在每个频道各有转发）
+        const referenceId = replyQQId !== undefined ? this.discordByQQ.get(replyQQId)?.[bridge.key] : undefined;
+        const sent = await this.sendWithReference(channel, { content, files }, referenceId);
         // 登记映射：Discord 用户回复机器人消息时可按回复链回传到 QQ
-        this.registerDiscordMessage(sent.id, event.messageId);
+        this.registerDiscordMessage(sent.id, event.messageId, bridge.key);
         bot.logger?.debug(`[DiscordBridge] 机器人消息→Discord：${event.groupId} → ${bridge.key}（${sent.id}）`);
       } catch (error) {
         bot.logger?.error(
           `[DiscordBridge] 机器人消息转发失败（${bridge.key}）: ${error instanceof Error ? error.message : String(error)}`
         );
       }
+    }
+  }
+
+  /**
+   * 带回复引用发送；被引用消息已删除或不可见（MESSAGE_REFERENCE_UNKNOWN）时
+   * 降级为无引用发送，保证消息不丢。
+   */
+  private async sendWithReference(
+    channel: TextChannel,
+    payload: { content: string; files: { attachment: Buffer; name: string }[] },
+    referenceId?: string
+  ): Promise<DiscordMessage> {
+    try {
+      return await channel.send({
+        ...payload,
+        ...(referenceId ? { reply: { messageReference: referenceId } } : {}),
+        allowedMentions: { parse: [], repliedUser: false }
+      });
+    } catch (error) {
+      if (referenceId && error instanceof Error && error.message.includes('MESSAGE_REFERENCE_UNKNOWN')) {
+        return await channel.send({ ...payload, allowedMentions: { parse: [], repliedUser: false } });
+      }
+      throw error;
     }
   }
 
@@ -724,7 +738,7 @@ export class DiscordBridge {
     // fromBridge：标记为桥自身发出的消息，发送出口钩子据此跳过，避免回环
     const qqMessageId = await bot.sendGroupMsg(bridge.entry.group, segments, { fromBridge: true });
     if (qqMessageId !== undefined) {
-      this.registerQQMessage(qqMessageId, message.id, viaCommand);
+      this.registerQQMessage(qqMessageId, message.id, bridge.key, viaCommand);
       this.bridgeByQQForward.set(qqMessageId, bridge.key);
       bot.logger?.debug(`[DiscordBridge] Discord→QQ：${bridge.key} → ${bridge.entry.group}（${qqMessageId}）`);
     }
@@ -827,29 +841,35 @@ export class DiscordBridge {
   // 路由表与频道解析
   // -------------------------------------------------------------------------
 
-  /** 登记一次 QQ→Discord 转发的 id 映射（回复链用） */
-  private registerDiscordMessage(discordId: string, qqId: number, viaCommand: boolean = false): void {
+  /** 登记一次 QQ→Discord 转发的 id 映射（回复链用；按 bridge key 分别记录，同群多频道互不覆盖） */
+  private registerDiscordMessage(discordId: string, qqId: number, bridgeKey: string, viaCommand: boolean = false): void {
     const key = this.snowflakeToKey(discordId);
-    this.discordByQQ.set(qqId, discordId);
+    const entry = this.discordByQQ.get(qqId) ?? {};
+    entry[bridgeKey] = discordId;
+    this.discordByQQ.set(qqId, entry);
     this.qqByDiscord.set(key, qqId);
     this.dcFromBridge.set(key, true);
   }
 
-  /** 登记一次 Discord→QQ 转发的 id 映射（回复链用） */
-  private registerQQMessage(qqId: number, discordId: string, viaCommand: boolean = false): void {
+  /** 登记一次 Discord→QQ 转发的 id 映射（回复链用；按 bridge key 分别记录，同群多频道互不覆盖） */
+  private registerQQMessage(qqId: number, discordId: string, bridgeKey: string, viaCommand: boolean = false): void {
     this.qqByDiscord.set(this.snowflakeToKey(discordId), qqId);
-    this.discordByQQ.set(qqId, discordId);
+    const entry = this.discordByQQ.get(qqId) ?? {};
+    entry[bridgeKey] = discordId;
+    this.discordByQQ.set(qqId, entry);
     this.qqFromBridge.set(qqId, true);
   }
 
   /**
    * Discord snowflake 是 19 位十进制数，超出 JS Number 安全整数范围。
-   * 回复链映射用十进制字符串数值化（Number 可精确表示的最大范围外的部分按模 2^53 折叠），
-   * 碰撞概率可忽略，避免全局改用字符串键；不依赖 BigInt 字面量（target < ES2020）。
+   * 回复链映射用十进制字符串数值化（按模 2^42 折叠）。模数取 2^42 而非 2^53：
+   * 折叠的中间值 value*10+d 必须小于 2^53 才不损失精度（2^53 模数会让中间值
+   * 达到 ~9e16 > 2^53，相邻 id 折叠后相撞）；2^42 下中间值 ~4.4e13，全程精确。
+   * 不依赖 BigInt（target < ES2020 无 BigInt 类型）。
    */
   private snowflakeToKey(id: string): number {
     let value = 0;
-    const MODULUS = Number.MAX_SAFE_INTEGER + 1;
+    const MODULUS = 2 ** 42;
     for (const char of id) {
       value = (value * 10 + (char.charCodeAt(0) - 48)) % MODULUS;
     }
