@@ -7,6 +7,8 @@ import { DiscordMsgCommandSource, isDiscordAdmin } from '@/features/discord-brid
 import { executeCommand, normalizeCommandText } from '@/command';
 import { Github } from '@/features/github';
 import { HermesBridge } from '@/features/hermes';
+import { getHermesConfig } from '@/features/hermes/config';
+import { ReactionManager } from '@/features/hermes/reaction';
 import { handleSlashInteraction, registerSlashCommands } from '@/features/discord-bridge/slash';
 
 /**
@@ -222,6 +224,12 @@ export class DiscordBridge {
     });
     this.client.once('clientReady', client => {
       this.bot?.logger?.info(`[DiscordBridge] 已登录 Discord：${client.user.tag}`);
+      // 清理上次进程退出时残留的「AI 处理中」表情回应（Discord 侧）
+      this.cleanupStaleHermesReactions(client).catch(error => {
+        this.bot?.logger?.error(
+          `[DiscordBridge] 残留表情回应清理失败: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
       // 注册原生斜杠命令（guild 级即时生效；bridges 配置去重的全部服务器）
       const guildIds = [...new Set(Object.keys(getDiscordBridgeConfig().bridges).map(key => key.split('#')[0]!))];
       registerSlashCommands(client, guildIds, bot).catch(error => {
@@ -249,6 +257,36 @@ export class DiscordBridge {
         `[DiscordBridge] Discord 登录失败: ${error instanceof Error ? error.message : String(error)}`
       );
     });
+  }
+
+  /**
+   * 启动清理：摘除上次进程在 AI 处理中退出时残留的 Discord 表情回应。
+   * 记录由 HermesBridge 在贴表情时立即持久化（data/hermes-reactions.json）；
+   * 消息已删除/频道不可达等失败仅清理记录，不做重试。
+   */
+  private async cleanupStaleHermesReactions(client: Client): Promise<void> {
+    const reactions = ReactionManager.getInstance();
+    const stale = reactions.listDiscord();
+    for (const record of stale) {
+      try {
+        const channel = record.channelId ? await client.channels.fetch(record.channelId) : null;
+        if (channel?.isTextBased()) {
+          const message = await channel.messages.fetch(record.messageId);
+          const reaction =
+            message.reactions.resolve(record.emoji) ??
+            message.reactions.cache.find(item => item.emoji.name === record.emoji);
+          await reaction?.users.remove(client.user?.id);
+        }
+      } catch (error) {
+        this.bot?.logger?.warn(
+          `[DiscordBridge] 摘除残留表情回应失败（${record.key}）: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+      reactions.drop(record.key);
+    }
+    if (stale.length > 0) {
+      this.bot?.logger?.info(`[DiscordBridge] 已清理 ${stale.length} 条残留的 Discord 表情回应`);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -671,6 +709,13 @@ export class DiscordBridge {
                 `[DiscordBridge] Hermes 图片发送失败: ${error instanceof Error ? error.message : String(error)}`
               );
             });
+        },
+        // 摘除机器人对触发消息的「AI 处理中」表情回应（完成/失败/停止时由 HermesBridge 调用）
+        removeReaction: async () => {
+          const emoji = getHermesConfig().reactionEmojiDiscord;
+          const reaction =
+            message.reactions.resolve(emoji) ?? message.reactions.cache.find(item => item.emoji.name === emoji);
+          await reaction?.users.remove();
         }
       });
     }

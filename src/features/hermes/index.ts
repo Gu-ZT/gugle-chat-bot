@@ -8,6 +8,7 @@ import { HermesClient } from '@/features/hermes/client';
 import { SkillManager } from '@/features/hermes/skills';
 import { ChatHistoryStore } from '@/features/hermes/history';
 import { buildConversationHistory, buildGroupContext, appendAutoCardNote } from '@/features/hermes/context';
+import { ReactionManager } from '@/features/hermes/reaction';
 import { Github } from '@/features/github';
 import { isGithubEnabledGroup } from '@/config/features';
 import { renderApprovalImage, renderProgressImage } from '@/features/hermes/render';
@@ -53,6 +54,9 @@ import {
  * - 查询类技能（MC版本 / MC服务器 / MC维基 / Modrinth版本，feedback 标记）的执行结果
  *   不直接发摘要，而是作为 [工具结果] 输入再提交一轮 run 由 AI 整理回答（最多回喂
  *   MAX_FEEDBACK_DEPTH 轮防循环，达上限后数据附在回复里兜底）；
+ * - 触发 AI 时给触发消息贴「处理中」表情回应（QQ 贴表情 / Discord reaction，
+ *   reaction.ts），完整回复完成（含回喂轮）后摘除；记录立即持久化到
+ *   data/hermes-reactions.json，进程在回应期间退出时下次启动自动清理残留；
  * - AI 的群回复经 bot.sendGroupMsg 发出，会按既定行为同步转发到互通的 Discord 频道。
  *
  * Discord 频道触发（对上游的扩展）：
@@ -92,6 +96,8 @@ export class HermesBridge {
   private bot?: QQBot;
   private readonly hermes = new HermesClient();
   private readonly skillManager = new SkillManager();
+  /** 「处理中」表情回应（触发时贴上、完整回复后摘除、残留随重启清理） */
+  private readonly reactions = ReactionManager.getInstance();
 
   /** 查询技能结果回喂的最大轮数（防止 AI 反复调用查询技能死循环） */
   private static readonly MAX_FEEDBACK_DEPTH = 2;
@@ -702,13 +708,18 @@ export class HermesBridge {
       return;
     }
 
+    // 贴上「处理中」表情回应（立即持久化，进程崩溃时由下次启动清理残留）
+    const reactionKey = await this.reactions.addQQ(bot, msg.message_id);
+
     await this.startHermesRun(
       bot,
       route,
       text,
       formatted.images,
       this.senderLabel(msg.sender, route.userId),
-      msg.message_id
+      msg.message_id,
+      0,
+      reactionKey ?? undefined
     );
   }
 
@@ -774,7 +785,18 @@ export class HermesBridge {
       return;
     }
 
-    await this.startHermesRun(bot, route, text, formatted.images, label, 0);
+    // 贴上「处理中」表情回应（立即持久化，摘除动作由委托完成）
+    let reactionKey: string | undefined;
+    if (config.reactionEnabled) {
+      try {
+        await message.react(config.reactionEmojiDiscord);
+        reactionKey = this.reactions.persistDiscord(message.channelId, message.id, config.reactionEmojiDiscord);
+      } catch (error) {
+        bot.logger?.warn(`[Hermes] Discord 表情回应失败: ${(error as Error).message}`);
+      }
+    }
+
+    await this.startHermesRun(bot, route, text, formatted.images, label, 0, 0, reactionKey);
   }
 
   /** Discord 消息正文纯文本化：提及/角色/频道/自定义表情 → 可读文本，并剔除对 bot 的提及 */
@@ -865,6 +887,8 @@ export class HermesBridge {
    * 组装提示词、提交 Hermes 运行并挂接 SSE 事件流。
    * feedbackDepth > 0 表示这是查询技能的回喂轮：text 是工具数据而非用户发言，
    * 不带发言人前缀（历史中保持在当前对话主线上）。
+   * reactionKey 为「处理中」表情回应的持久化记录键：首轮由触发处贴上后传入，
+   * 回喂轮原样转移，对话链完全结束时由 handleRunComplete 摘除。
    */
   private async startHermesRun(
     bot: QQBot,
@@ -873,7 +897,8 @@ export class HermesBridge {
     images: string[],
     senderLabel: string,
     replyMsgId: number,
-    feedbackDepth: number = 0
+    feedbackDepth: number = 0,
+    reactionKey?: string
   ): Promise<void> {
     const config = getHermesConfig();
 
@@ -932,7 +957,8 @@ export class HermesBridge {
         finalOutput: '',
         userMsgId: replyMsgId,
         senderLabel,
-        feedbackDepth
+        feedbackDepth,
+        ...(reactionKey !== undefined ? { reactionKey } : {})
       };
       this.activeRuns.set(runId, runState);
 
@@ -1006,8 +1032,31 @@ export class HermesBridge {
       runState.stream = stream;
     } catch (error) {
       bot.logger?.error(`[Hermes] 提交错误: ${(error as Error).message}`);
+      // 提交即失败：摘除「处理中」表情回应
+      if (reactionKey) {
+        await this.removeReaction(reactionKey, route).catch(() => {});
+      }
       await this.sendReplyWithMention(route, `❌ 调用 Hermes 失败: ${(error as Error).message}`, replyMsgId);
     }
+  }
+
+  /** 摘除「处理中」表情回应并移除持久化记录（QQ 走 NapCat API；Discord 走路由委托） */
+  private async removeReaction(reactionKey: string, route: RouteInfo): Promise<void> {
+    if (route.type === 'discord') {
+      try {
+        await route.discord?.removeReaction?.();
+      } catch (error) {
+        this.bot?.logger?.warn(`[Hermes] Discord 摘除表情回应失败: ${(error as Error).message}`);
+      }
+      this.reactions.drop(reactionKey);
+      return;
+    }
+    await this.reactions.removeQQ(this.bot, reactionKey);
+  }
+
+  /** 启动时清理残留的 QQ 表情回应（上次进程在 AI 处理中退出导致）；Discord 残留由 DiscordBridge 清理 */
+  public async cleanupStaleQQReactions(bot: QQBot): Promise<void> {
+    await this.reactions.cleanupQQ(bot);
   }
 
   /** 读取 configs/SOUL.md 作为系统提示词（每次触发时读取，编辑免重启） */
@@ -1033,6 +1082,22 @@ export class HermesBridge {
     this.pendingApprovals.delete(runId);
     this.approvalMessageSent.delete(runId);
 
+    // 「处理中」表情回应默认随本轮结束摘除；查询技能回喂会把记录键转移给
+    // 下一轮 run（keepReaction），对话链完全结束时才摘除
+    let keepReaction = false;
+    try {
+      await this.finishRun(run, () => {
+        keepReaction = true;
+      });
+    } finally {
+      if (!keepReaction && run.reactionKey) {
+        await this.removeReaction(run.reactionKey, run.route).catch(() => {});
+      }
+    }
+  }
+
+  /** handleRunComplete 主体（拆出以便统一在 finally 中摘除表情回应；markKeepReaction 用于回喂转移） */
+  private async finishRun(run: RunState, markKeepReaction: () => void): Promise<void> {
     let output = run.finalOutput || run.messageDelta;
 
     // 如果中间已经发过文本，通过与 messageDelta 比对找出未发送的剩余部分
@@ -1082,6 +1147,8 @@ export class HermesBridge {
           }
           this.appendHistory(this.getSessionKey(run.route), 'assistant', output, run.route.userId, run.senderLabel);
           const feedbackText = skillOutput.feedback.map(item => `[工具结果 ${item.skill}]\n${item.data}`).join('\n\n');
+          // 表情回应记录键随回喂转移给下一轮，链尾才摘除
+          markKeepReaction();
           await this.startHermesRun(
             this.bot,
             run.route,
@@ -1089,7 +1156,8 @@ export class HermesBridge {
             [],
             run.senderLabel,
             run.userMsgId,
-            depth + 1
+            depth + 1,
+            run.reactionKey
           );
           return;
         }

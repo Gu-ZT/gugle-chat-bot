@@ -20,6 +20,8 @@ export interface DiscordRouteContext {
   send(text: string, quote: boolean): Promise<void>;
   /** 发送 base64 图片（Discord 附件） */
   sendImage(base64: string): Promise<void>;
+  /** 摘除机器人对触发消息的「处理中」表情回应（由 DiscordBridge 注入，绑定原消息） */
+  removeReaction?(): Promise<void>;
 }
 
 /** handleDiscordMessage 的调用参数（DiscordRouteContext + 消息元信息） */
@@ -96,6 +98,8 @@ export interface RunState {
   senderLabel: string;
   /** 工具结果回喂轮次（0 = 用户消息首轮；达上限后查询结果不再回喂，直接附在回复里） */
   feedbackDepth?: number;
+  /** 「处理中」表情回应的持久化记录键（回喂轮转移给下一轮，对话链完全结束时摘除） */
+  reactionKey?: string;
   stream?: { abort(): void };
 }
 

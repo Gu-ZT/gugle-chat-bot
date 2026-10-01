@@ -65,6 +65,12 @@ export interface HermesBridgeConfig {
   approvalEnabled: boolean;
   /** 审批超时自动拒绝（秒），0=不超时 */
   approvalTimeoutSec: number;
+  /** 是否启用「AI 处理中」表情回应（QQ 贴表情 / Discord reaction，完成后摘除） */
+  reactionEnabled: boolean;
+  /** QQ 表情回应的 emoji_id（NapCat set_msg_emoji_like；76=👍 强） */
+  reactionEmojiQq: string;
+  /** Discord 表情回应（unicode emoji） */
+  reactionEmojiDiscord: string;
 }
 
 export function hermesConfigFactory(): HermesBridgeConfig {
@@ -89,7 +95,10 @@ export function hermesConfigFactory(): HermesBridgeConfig {
     persistHistoryEnabled: true,
     persistHistoryMax: 100,
     approvalEnabled: true,
-    approvalTimeoutSec: 300
+    approvalTimeoutSec: 300,
+    reactionEnabled: true,
+    reactionEmojiQq: '76',
+    reactionEmojiDiscord: '👀'
   };
 }
 
@@ -140,7 +149,10 @@ export function normalizeHermesConfig(raw: unknown): HermesBridgeConfig | null {
     persistHistoryEnabled: asBool(record.persistHistoryEnabled, fallback.persistHistoryEnabled),
     persistHistoryMax: asPositiveNumber(record.persistHistoryMax, fallback.persistHistoryMax),
     approvalEnabled: asBool(record.approvalEnabled, fallback.approvalEnabled),
-    approvalTimeoutSec: asPositiveNumber(record.approvalTimeoutSec, fallback.approvalTimeoutSec)
+    approvalTimeoutSec: asPositiveNumber(record.approvalTimeoutSec, fallback.approvalTimeoutSec),
+    reactionEnabled: asBool(record.reactionEnabled, fallback.reactionEnabled),
+    reactionEmojiQq: asString(record.reactionEmojiQq, fallback.reactionEmojiQq),
+    reactionEmojiDiscord: asString(record.reactionEmojiDiscord, fallback.reactionEmojiDiscord)
   };
 }
 

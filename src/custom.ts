@@ -360,6 +360,10 @@ ${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings 
   public startPeakValleyTimer(bot: QQBot): void {
     CustomBot.peakValleyTimer.start(bot);
     DiscordBridge.getInstance().start(bot);
+    // 清理上次进程在 AI 处理中退出时残留的 QQ 表情回应（Discord 残留在 clientReady 后清理）
+    HermesBridge.getInstance().cleanupStaleQQReactions(bot).catch(error => {
+      bot.logger?.error(`[Hermes] 残留表情回应清理失败: ${error instanceof Error ? error.message : String(error)}`);
+    });
   }
 
   @bot.cron('0/30 * * * * *')
