@@ -38,8 +38,8 @@ async function main() {
   const admin = { bot, api, isAdmin: () => true };
   const notAdmin = { bot, api, isAdmin: () => false };
 
-  // 无标签 → 原文返回，无图片
-  check('no-tags', await manager.processTags('普通回复', route, admin), { text: '普通回复', images: [] });
+  // 无标签 → 原文返回，无图片无回喂
+  check('no-tags', await manager.processTags('普通回复', route, admin), { text: '普通回复', images: [], feedback: [] });
 
   // 管理员执行禁言：标签移除 + 摘要附加 + API 调用（分钟→秒）
   calls.length = 0;
@@ -126,13 +126,57 @@ async function main() {
   check('skill-images-text', withImages.text, '看图\n\n✅ 图好了');
   check('skill-images', withImages.images, ['base64://AAA', 'BBB']);
 
-  // 技能提示词包含公共技能分组与管理技能分组
+  // ── 查询类技能（feedback：结果回喂给 AI，不附加摘要） ──
+  // 注入测试技能：一个返回数据、一个抛错
+  (manager as any).skills.push({
+    name: '查天气',
+    usage: '查天气',
+    description: '测试',
+    adminOnly: false,
+    feedback: true,
+    execute: async () => '晴 25°C'
+  });
+  (manager as any).skillIndex.set('查天气', (manager as any).skills[(manager as any).skills.length - 1]);
+  (manager as any).skills.push({
+    name: '查失败',
+    usage: '查失败',
+    description: '测试',
+    adminOnly: false,
+    feedback: true,
+    execute: async () => {
+      throw new Error('接口挂了');
+    }
+  });
+  (manager as any).skillIndex.set('查失败', (manager as any).skills[(manager as any).skills.length - 1]);
+
+  // 查询结果进 feedback，标签移除但不附加 ✅ 摘要
+  const fb = await manager.processTags('我看看[SKILL:查天气]', route, admin);
+  check('feedback-text-no-summary', fb.text, '我看看');
+  check('feedback-data', fb.feedback, [{ skill: '查天气', data: '晴 25°C' }]);
+  // 查询失败同样回喂（让 AI 告知用户没查到），不进错误摘要
+  const fbErr = await manager.processTags('[SKILL:查失败]', route, admin);
+  check('feedback-error-data', fbErr.feedback, [{ skill: '查失败', data: '执行失败：接口挂了' }]);
+  check('feedback-error-text', fbErr.text, '');
+
+  // 真实查询技能的参数校验（校验失败不触网）
+  const mcNoArg = await manager.processTags('[SKILL:MC服务器]', route, admin);
+  check('mc-server-no-arg', mcNoArg.feedback, [{ skill: 'MC服务器', data: '执行失败：缺少服务器地址，格式: MC服务器 <ip> [端口]' }]);
+  const wikiNoArg = await manager.processTags('[SKILL:MC维基]', route, admin);
+  check('mc-wiki-no-arg', wikiNoArg.feedback, [{ skill: 'MC维基', data: '执行失败：缺少关键词，格式: MC维基 <关键词>' }]);
+  const modNoArg = await manager.processTags('[SKILL:Modrinth版本]', route, admin);
+  check('modrinth-no-arg', modNoArg.feedback, [
+    { skill: 'Modrinth版本', data: '执行失败：缺少模组 slug，格式: Modrinth版本 <slug>' }
+  ]);
+
+  // 技能提示词包含公共技能分组、查询分组与管理技能分组
   const prompt = manager.buildPrompt();
   check('prompt-header', prompt.includes('## 可用技能'), true);
   check('prompt-admin-section', prompt.includes('管理技能（仅管理员可用）'), true);
   check('prompt-usage', prompt.includes('[SKILL:技能名 参数...]'), true);
   check('prompt-public-skills', prompt.includes('查Issue') && prompt.includes('B站视频'), true);
   check('prompt-card-hint', prompt.includes('卡片类技能'), true);
+  check('prompt-query-section', prompt.includes('查询技能'), true);
+  check('prompt-query-skills', ['MC版本', 'MC服务器', 'MC维基', 'Modrinth版本'].every(s => prompt.includes(s)), true);
 
   process.exit(failed === 0 ? 0 : 1);
 }

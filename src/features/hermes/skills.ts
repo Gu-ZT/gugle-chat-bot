@@ -1,7 +1,17 @@
-import { GroupAdminApi, ProcessedSkillOutput, RouteInfo, Skill, SkillExecuteContext, SkillResult } from '@/features/hermes/types';
+import {
+  GroupAdminApi,
+  ProcessedSkillOutput,
+  RouteInfo,
+  Skill,
+  SkillExecuteContext,
+  SkillFeedback,
+  SkillResult
+} from '@/features/hermes/types';
 import type { QQBot } from '@/index';
 import { Github } from '@/features/github';
 import { Bili } from '@/features/bili';
+import { MinecraftAPI } from '@/features/minecraft';
+import { ModrinthAPI } from '@/features/modrinth';
 import { isGithubEnabledGroup } from '@/config/features';
 
 /**
@@ -61,6 +71,38 @@ export class SkillManager {
         description: '获取 B 站视频信息并生成卡片（标题/UP主/时长/播放点赞评论数）',
         adminOnly: false,
         execute: this.executeBiliCard.bind(this)
+      },
+      {
+        name: 'MC版本',
+        usage: 'MC版本',
+        description: '查询 Minecraft 最新正式版与快照版',
+        adminOnly: false,
+        feedback: true,
+        execute: this.executeMcVersion.bind(this)
+      },
+      {
+        name: 'MC服务器',
+        usage: 'MC服务器 <ip> [端口]',
+        description: '查询 Minecraft Java 服务器状态（MOTD/版本/在线玩家）',
+        adminOnly: false,
+        feedback: true,
+        execute: this.executeMcServer.bind(this)
+      },
+      {
+        name: 'MC维基',
+        usage: 'MC维基 <关键词>',
+        description: '搜索中文 Minecraft 维基，返回条目摘要与链接',
+        adminOnly: false,
+        feedback: true,
+        execute: this.executeMcWiki.bind(this)
+      },
+      {
+        name: 'Modrinth版本',
+        usage: 'Modrinth版本 <slug>',
+        description: '查询 Modrinth 模组最新版本与下载直链（slug 如 create-aeronautics）',
+        adminOnly: false,
+        feedback: true,
+        execute: this.executeModrinthVersion.bind(this)
       }
     ];
 
@@ -75,13 +117,22 @@ export class SkillManager {
     if (this.skills.length === 0) return '';
 
     const adminSkills = this.skills.filter(skill => skill.adminOnly);
-    const publicSkills = this.skills.filter(skill => !skill.adminOnly);
+    const publicSkills = this.skills.filter(skill => !skill.adminOnly && !skill.feedback);
+    const querySkills = this.skills.filter(skill => !skill.adminOnly && skill.feedback);
 
     const lines: string[] = ['## 可用技能'];
 
     if (publicSkills.length > 0) {
       lines.push('');
       for (const skill of publicSkills) {
+        lines.push(`- \`${skill.usage}\` — ${skill.description}`);
+      }
+    }
+
+    if (querySkills.length > 0) {
+      lines.push('');
+      lines.push('### 查询技能（调用后结果会返回给你，请整理成口语化回答后再回复，不要复述原始数据）');
+      for (const skill of querySkills) {
         lines.push(`- \`${skill.usage}\` — ${skill.description}`);
       }
     }
@@ -98,6 +149,7 @@ export class SkillManager {
     lines.push('调用格式：在回复中插入 `[SKILL:技能名 参数...]`，标签会在发送前被处理并移除。');
     lines.push('注意：参数中的 QQ 号使用纯数字格式，多个技能可在一段话中同时调用。');
     lines.push('卡片类技能（查Issue / B站视频）会以图片形式随回复一起发出，无需在文本中复述卡片内容。');
+    lines.push('查询类技能调用后请等待数据返回，不要假装已经知道结果。');
 
     return lines.join('\n');
   }
@@ -126,10 +178,11 @@ export class SkillManager {
       tags.push({ raw: match[0], content: match[1]! });
     }
 
-    if (tags.length === 0) return { text: output, images: [] };
+    if (tags.length === 0) return { text: output, images: [], feedback: [] };
 
     // 逐个解析并执行
     const results: SkillResult[] = [];
+    const feedback: SkillFeedback[] = [];
     for (const tag of tags) {
       const parts = tag.content.trim().split(/\s+/);
       const skillName = parts[0]!;
@@ -149,6 +202,12 @@ export class SkillManager {
 
       try {
         const execution = await skill.execute({ bot, api, route, args });
+        const data = typeof execution === 'string' ? execution : execution.message;
+        if (skill.feedback) {
+          // 查询类：数据回喂给 AI 整理回答，不附加摘要
+          feedback.push({ skill: skillName, data });
+          continue;
+        }
         if (typeof execution === 'string') {
           results.push({ ok: true, skill: skillName, message: execution });
         } else {
@@ -160,7 +219,12 @@ export class SkillManager {
           });
         }
       } catch (error) {
-        results.push({ ok: false, skill: skillName, error: (error as Error).message });
+        // 查询类失败同样回喂（让 AI 告知用户没查到），动作类记入错误摘要
+        if (skill.feedback) {
+          feedback.push({ skill: skillName, data: `执行失败：${(error as Error).message}` });
+        } else {
+          results.push({ ok: false, skill: skillName, error: (error as Error).message });
+        }
       }
     }
 
@@ -186,7 +250,7 @@ export class SkillManager {
       cleaned = cleaned + '\n\n' + summaryLines.join('\n');
     }
 
-    return { text: cleaned.trim(), images };
+    return { text: cleaned.trim(), images, feedback };
   }
 
   /** 从参数中提取纯数字 QQ 号 */
@@ -290,5 +354,53 @@ export class SkillManager {
     if (!input) throw new Error('缺少视频号，格式: B站视频 <BV号/av号/b23.tv短链>');
     const base64 = await Bili.renderVideoCard(bot, input);
     return { message: '已生成 B 站视频卡片', images: [base64] };
+  }
+
+  // ── 查询类公共技能（feedback：结果回喂给 AI 整理回答，不直接发摘要） ──
+
+  /** MC版本：Minecraft 最新正式版/快照版 */
+  private async executeMcVersion(): Promise<string> {
+    const version = await MinecraftAPI.getVersion();
+    if (!version.success) throw new Error('获取 Minecraft 版本信息失败');
+    return `最新正式版：${version.latest.release}\n最新快照版：${version.latest.snapshot}`;
+  }
+
+  /** MC服务器：Java 版服务器状态（地址可带端口，也可分开传） */
+  private async executeMcServer({ args }: SkillExecuteContext): Promise<string> {
+    const ip = args[0]?.trim();
+    if (!ip) throw new Error('缺少服务器地址，格式: MC服务器 <ip> [端口]');
+    const parsed = args[1] ? Number.parseInt(args[1], 10) : NaN;
+    const status = await MinecraftAPI.getMinecraftServerStatus(ip, Number.isSafeInteger(parsed) ? parsed : undefined);
+    if (!status.online) return `服务器 ${ip} 当前离线或无法连接`;
+    return [
+      `服务器 ${ip} 在线`,
+      `MOTD：${status.motd}`,
+      `游戏版本：${status.version}`,
+      `在线玩家：${status.players.online}/${status.players.max}`,
+      status.players.list.length > 0 ? `在线列表：${status.players.list.join('、')}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  /** MC维基：中文 Minecraft 维基搜索（关键词可含空格） */
+  private async executeMcWiki({ args }: SkillExecuteContext): Promise<string> {
+    const query = args.join(' ').trim();
+    if (!query) throw new Error('缺少关键词，格式: MC维基 <关键词>');
+    const wiki = await MinecraftAPI.getMinecraftWiki(query);
+    if (!wiki.success) return `未找到「${query}」相关的维基条目`;
+    return `条目：${wiki.title}\n摘要：${wiki.desc.trim()}\n链接：${wiki.url}`;
+  }
+
+  /** Modrinth版本：模组最新版本与下载直链 */
+  private async executeModrinthVersion({ args }: SkillExecuteContext): Promise<string> {
+    const slug = args[0]?.trim();
+    if (!slug) throw new Error('缺少模组 slug，格式: Modrinth版本 <slug>');
+    const version = await ModrinthAPI.getModVersion(slug);
+    if (!version.success) throw new Error(`获取模组 ${slug} 的版本信息失败（slug 是否正确？）`);
+    return (
+      `模组 ${slug} 最新版本：${version.latest}\n` +
+      `下载直链：https://api.modrinth.com/maven/maven/modrinth/${slug}/${version.latest}/${slug}-${version.latest}.jar`
+    );
   }
 }

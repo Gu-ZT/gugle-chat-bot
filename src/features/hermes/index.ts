@@ -50,6 +50,9 @@ import {
  *   系统提示显式声明当前对话者与标注约定，避免串台认错人（context.ts）；
  * - 技能系统在群管理技能之外扩展卡片类公共技能（查Issue / B站视频），技能可产出
  *   base64 图片，由完成处理器逐张发送（复用 github / bili 功能的渲染管线）；
+ * - 查询类技能（MC版本 / MC服务器 / MC维基 / Modrinth版本，feedback 标记）的执行结果
+ *   不直接发摘要，而是作为 [工具结果] 输入再提交一轮 run 由 AI 整理回答（最多回喂
+ *   MAX_FEEDBACK_DEPTH 轮防循环，达上限后数据附在回复里兜底）；
  * - AI 的群回复经 bot.sendGroupMsg 发出，会按既定行为同步转发到互通的 Discord 频道。
  *
  * Discord 频道触发（对上游的扩展）：
@@ -89,6 +92,9 @@ export class HermesBridge {
   private bot?: QQBot;
   private readonly hermes = new HermesClient();
   private readonly skillManager = new SkillManager();
+
+  /** 查询技能结果回喂的最大轮数（防止 AI 反复调用查询技能死循环） */
+  private static readonly MAX_FEEDBACK_DEPTH = 2;
 
   /** 对话会话：sessionKey → Session */
   private readonly sessions = new Map<string, Session>();
@@ -855,19 +861,25 @@ export class HermesBridge {
   //  Hermes 运行提交（QQ 与 Discord 共用）
   // ===================================================================
 
-  /** 组装提示词、提交 Hermes 运行并挂接 SSE 事件流 */
+  /**
+   * 组装提示词、提交 Hermes 运行并挂接 SSE 事件流。
+   * feedbackDepth > 0 表示这是查询技能的回喂轮：text 是工具数据而非用户发言，
+   * 不带发言人前缀（历史中保持在当前对话主线上）。
+   */
   private async startHermesRun(
     bot: QQBot,
     route: RouteInfo,
     text: string,
     images: string[],
     senderLabel: string,
-    replyMsgId: number
+    replyMsgId: number,
+    feedbackDepth: number = 0
   ): Promise<void> {
     const config = getHermesConfig();
 
-    // 构建用户提示词（私聊不带发言人前缀）
-    const userPrompt = route.type === 'user' ? text : `${senderLabel}: ${text}`;
+    // 构建用户提示词（私聊与回喂轮不带发言人前缀）
+    const isFeedback = feedbackDepth > 0;
+    const userPrompt = isFeedback || route.type === 'user' ? text : `${senderLabel}: ${text}`;
     // 带图消息：组装 OpenAI 多模态内容段，将原图传给 Hermes
     const userMessage: string | MessageContentPart[] =
       images.length > 0
@@ -884,7 +896,9 @@ export class HermesBridge {
     const hermesSessionBase = route.type === 'user' ? `user_${route.userId}` : `group_${route.groupId}_user_${route.userId}`;
     const hermesSessionId = sessionVersion > 0 ? `${hermesSessionBase}:v${sessionVersion}` : hermesSessionBase;
 
-    const historyContent = route.type === 'user' ? text : `${senderLabel}: ${text}`;
+    // 回喂轮（工具数据）与私聊不带发言人前缀；工具数据标记 userId=当前对话者，
+    // 在历史重组时保持在对话主线上（不会被标注为 [群聊背景]）
+    const historyContent = isFeedback || route.type === 'user' ? text : `${senderLabel}: ${text}`;
     this.appendHistory(sessionKey, 'user', historyContent, route.userId);
 
     // 组装系统提示词：configs/SOUL.md > systemPrompt > 空 + 群聊上下文 + 技能列表。
@@ -917,7 +931,8 @@ export class HermesBridge {
         lastTextSent: 0,
         finalOutput: '',
         userMsgId: replyMsgId,
-        senderLabel
+        senderLabel,
+        feedbackDepth
       };
       this.activeRuns.set(runId, runState);
 
@@ -1053,6 +1068,33 @@ export class HermesBridge {
         await this.sendReplyImage(run.route, image).catch(error => {
           this.bot?.logger?.error(`[Hermes] 技能卡片发送失败: ${(error as Error).message}`);
         });
+      }
+
+      // 查询类技能：把工具数据回喂给 AI 整理回答（再提交一轮 run，有防循环上限）
+      if (skillOutput.feedback.length > 0) {
+        const depth = run.feedbackDepth ?? 0;
+        if (depth < HermesBridge.MAX_FEEDBACK_DEPTH) {
+          // 中间文本（如「我查一下」）照常发出，工具数据记入历史后提交回喂轮
+          if (output) {
+            await this.sendReplyWithMention(run.route, output, run.userMsgId).catch(error => {
+              this.bot?.logger?.error(`[Hermes] 中间回复发送失败: ${(error as Error).message}`);
+            });
+          }
+          this.appendHistory(this.getSessionKey(run.route), 'assistant', output, run.route.userId, run.senderLabel);
+          const feedbackText = skillOutput.feedback.map(item => `[工具结果 ${item.skill}]\n${item.data}`).join('\n\n');
+          await this.startHermesRun(
+            this.bot,
+            run.route,
+            `${feedbackText}\n\n（以上是工具返回的数据，请据此用简短口语化的话回复对方，不要重复调用相同技能）`,
+            [],
+            run.senderLabel,
+            run.userMsgId,
+            depth + 1
+          );
+          return;
+        }
+        // 已达回喂上限：数据直接附在回复里兜底发出，不再提交新 run
+        output = `${output}\n\n${skillOutput.feedback.map(item => `${item.skill}：${item.data}`).join('\n')}`.trim();
       }
     }
     // 记录回复对象（userId + 展示标签）：历史提交时据其标注「你回复 xxx 的话」，防串台

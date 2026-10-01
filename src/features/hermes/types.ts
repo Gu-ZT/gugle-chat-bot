@@ -94,6 +94,8 @@ export interface RunState {
   userMsgId: number;
   /** 本轮对话发送者的展示标签（assistant 历史据此标注回复对象） */
   senderLabel: string;
+  /** 工具结果回喂轮次（0 = 用户消息首轮；达上限后查询结果不再回喂，直接附在回复里） */
+  feedbackDepth?: number;
   stream?: { abort(): void };
 }
 
@@ -224,7 +226,19 @@ export interface Skill {
   usage: string;
   description: string;
   adminOnly: boolean;
+  /**
+   * true：查询类技能——执行结果不作为摘要发给用户，而是回喂给 AI 整理回答
+   * （完成处理器会把结果以 [工具结果] 输入再提交一轮 run，有防循环上限）；
+   * false/缺省：动作/卡片类——执行摘要附加到回复文本后直接发出。
+   */
+  feedback?: boolean;
   execute(ctx: SkillExecuteContext): Promise<SkillExecution>;
+}
+
+/** 查询类技能的回喂数据 */
+export interface SkillFeedback {
+  skill: string;
+  data: string;
 }
 
 /** 技能执行结果 */
@@ -232,10 +246,11 @@ export type SkillResult =
   | { ok: true; skill: string; message: string; images?: string[] }
   | { ok: false; skill: string; error: string };
 
-/** processTags 的返回：清理后的文本 + 全部技能产出的图片 */
+/** processTags 的返回：清理后的文本 + 全部技能产出的图片 + 查询类技能的回喂数据 */
 export interface ProcessedSkillOutput {
   text: string;
   images: string[];
+  feedback: SkillFeedback[];
 }
 
 // ── 多模态消息内容 ──
