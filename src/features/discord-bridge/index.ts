@@ -37,6 +37,9 @@ import { handleSlashInteraction, registerSlashCommands } from '@/features/discor
  * - 机器人自身发出的 QQ 群消息转发到该群绑定的频道（经 QQBot.onGroupMessageSent
  *   钩子，fromBridge 标记防止回环）：与普通 QQ 消息同一套门控——need_cmd / need_reply
  *   频道仅放行「对该频道桥消息的回复」，webhook 推送（GitHub 订阅通知）一律不进；
+ * - 机器人自己在互通频道发出的 Discord 消息（命令回复、AI 回复、GitHub 卡片、
+ *   斜杠命令回复等）经 messageCreate 回推同步到 QQ（桥自身转发跳过防回环，
+ *   门控与普通 Discord 消息一致），QQ 侧可看到完整对话；
  * - Discord 频道中可直接使用全部已注册命令（/ 或 ! 前缀），回复发在 Discord 频道；
  *   未注册命令的 /xxx 文本按普通消息转发，不会回发 Invalid command；
  * - 同时把命令树注册为 Discord 原生斜杠命令（guild 级、自动补全），交互经 token
@@ -567,13 +570,23 @@ export class DiscordBridge {
 
   /** messageCreate 回调：把 Discord 频道消息转发到 QQ（或执行 /send） */
   private async handleDiscordMessage(message: DiscordMessage): Promise<void> {
-    if (message.author.bot || message.webhookId) return;
+    if (message.webhookId) return;
     if (message.channel.type !== ChannelType.GuildText) return;
     const guildId = message.guildId;
     if (!guildId) return;
 
     const bridge = this.resolveByChannel(guildId, message.channel.name);
     if (!bridge) return;
+
+    // messageCreate 同样回推 bot 自己的消息：机器人自己在互通频道发的消息（命令回复、
+    // AI 回复、GitHub 卡片、斜杠命令回复等）同步到 QQ，让 QQ 侧看到完整对话；
+    // 桥自身 QQ→Discord 的转发已在 handleOwnDiscordMessage 内跳过，不会回环
+    if (message.author.bot) {
+      if (message.author.id === this.client?.user?.id) {
+        await this.handleOwnDiscordMessage(message, bridge);
+      }
+      return;
+    }
 
     const raw = message.content ?? '';
     if (this.isSendCommand(raw)) {
@@ -655,6 +668,25 @@ export class DiscordBridge {
     // 门控：need_cmd 开启时仅放行「对桥消息的回复」（need_reply 不限制此方向）
     if (bridge.entry.need_cmd === 'true' && !isReplyToBridge) return;
 
+    await this.forwardDiscordToQQ(message, bridge, referenceId);
+  }
+
+  /**
+   * 机器人自己在 Discord 互通频道发出的消息 → QQ（命令回复、AI 回复、GitHub 卡片、
+   * 斜杠命令回复等，复用 forwardDiscordToQQ 的渲染/回复链/附件处理）。
+   *
+   * 防回环：桥自身 QQ→Discord 的转发已登记 dcFromBridge，直接跳过；
+   * 门控与普通 Discord 消息一致（need_cmd 频道仅放行「对桥消息的回复」）。
+   * 转发到 QQ 的消息带 fromBridge 标记且登记为桥消息，QQ 侧回复它可路由回本频道。
+   */
+  private async handleOwnDiscordMessage(message: DiscordMessage, bridge: ResolvedBridge): Promise<void> {
+    if (this.dcFromBridge.get(this.snowflakeToKey(message.id)) === true) return;
+    // 交互延迟占位等无内容消息不同步
+    if (!message.content && message.attachments.size === 0) return;
+    const referenceId = message.reference?.messageId;
+    const referenceKey = referenceId ? this.snowflakeToKey(referenceId) : undefined;
+    const isReplyToBridge = referenceKey !== undefined && this.dcFromBridge.get(referenceKey) === true;
+    if (bridge.entry.need_cmd === 'true' && !isReplyToBridge) return;
     await this.forwardDiscordToQQ(message, bridge, referenceId);
   }
 

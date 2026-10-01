@@ -117,6 +117,35 @@ async function main() {
   // webhook 推送即使带回复上下文也不进门控频道
   check('webhook-reply-still-skip', bridge.shouldForwardBotMessage(entryOf('false', 'true'), true, '940551045929639949#x'), false);
 
+  // ── 机器人自己的 Discord 消息 → QQ：桥转发跳过（防回环），其余按门控同步 ──
+  const sentToQQ: { id: string; bridge: string; referenceId: string | null }[] = [];
+  bridge.forwardDiscordToQQ = async (message: any, target: any, referenceId?: string | null) => {
+    sentToQQ.push({ id: message.id, bridge: target.key, referenceId: referenceId ?? null });
+  };
+  const ownMessage = (id: string, content: string, referenceId?: string) => ({
+    id,
+    content,
+    attachments: { size: 0 },
+    reference: referenceId ? { messageId: referenceId } : null
+  });
+  // 桥自身 QQ→Discord 的转发（id=9000000000000000001 已登记 dcFromBridge）→ 跳过防回环
+  await bridge.handleOwnDiscordMessage(ownMessage('9000000000000000001', 'bridged'), entryOf('false', 'false'));
+  check('own-skip-bridge-forward', sentToQQ.length, 0);
+  // 无门控频道：命令/AI 回复同步到 QQ
+  await bridge.handleOwnDiscordMessage(ownMessage('9000000000000000099', 'AI reply'), entryOf('false', 'false'));
+  check('own-forward-open', sentToQQ.length, 1);
+  check('own-forward-open-id', sentToQQ[0]?.id, '9000000000000000099');
+  // need_cmd 频道：非回复桥消息 → 跳过
+  await bridge.handleOwnDiscordMessage(ownMessage('9000000000000000100', 'AI reply'), entryOf('false', 'true'));
+  check('own-skip-need_cmd', sentToQQ.length, 1);
+  // need_cmd 频道：回复桥消息 → 放行，回复引用透传
+  await bridge.handleOwnDiscordMessage(ownMessage('9000000000000000101', 'AI reply', '9000000000000000001'), entryOf('false', 'true'));
+  check('own-forward-need_cmd-reply', sentToQQ.length, 2);
+  check('own-forward-reply-ref', sentToQQ[1]?.referenceId, '9000000000000000001');
+  // 无内容占位消息（交互延迟等）不同步
+  await bridge.handleOwnDiscordMessage(ownMessage('9000000000000000102', ''), entryOf('false', 'false'));
+  check('own-skip-empty', sentToQQ.length, 2);
+
   process.exit(failed === 0 ? 0 : 1);
 }
 
