@@ -13,7 +13,7 @@ import { Github } from '@/features/github';
 import * as cron from 'node-cron';
 import { BotEvent, BotEventCancelable, EventCallback } from '@/type/event';
 import { CommandManager, CommandSource } from 'gugle-command';
-import { BotCommandSource } from '@/command';
+import { BotCommandSource, executeCommand } from '@/command';
 
 /** bot.sendGroupMsg 的附加选项 */
 export interface SendGroupMsgOptions {
@@ -294,11 +294,11 @@ export class QQBot {
           // /send 后必须是空白或结尾，/sendxxx 仍交给命令分发
           const rest = command.slice('/send'.length);
           if (rest && !/^\s/.test(rest)) {
-            bot.commandManager.execute(new GroupMsgCommandSource(bot, msg), command);
+            executeCommand(bot.commandManager, new GroupMsgCommandSource(bot, msg), command);
             return;
           }
           if (!module.DiscordBridge.isSendTargetGroup(msg.group_id)) {
-            bot.commandManager.execute(new GroupMsgCommandSource(bot, msg), command);
+            executeCommand(bot.commandManager, new GroupMsgCommandSource(bot, msg), command);
           }
         })
         .catch(e => {
@@ -306,7 +306,7 @@ export class QQBot {
         });
       return;
     }
-    bot.commandManager.execute(new GroupMsgCommandSource(bot, msg), command);
+    executeCommand(bot.commandManager, new GroupMsgCommandSource(bot, msg), command);
   }
 
   // ------------------------------------------------

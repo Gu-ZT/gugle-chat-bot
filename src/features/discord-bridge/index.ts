@@ -4,7 +4,7 @@ import { GroupMessageWSMSG, Message, SentMessage } from '@/type';
 import { ConfigStore } from '@/config/manager';
 import { escapeDiscord, isDiscordMarkdown, renderDiscordMessageToImage } from '@/features/discord-bridge/markdown';
 import { DiscordMsgCommandSource, isDiscordAdmin } from '@/features/discord-bridge/source';
-import { normalizeCommandText } from '@/command';
+import { executeCommand, normalizeCommandText } from '@/command';
 import { Github } from '@/features/github';
 import { HermesBridge } from '@/features/hermes';
 
@@ -551,9 +551,9 @@ export class DiscordBridge {
     }
 
     // 命令分发：/ 或 ! 前缀且首段命中已注册命令时，在 Discord 侧直接执行并把回复发在
-    // Discord 频道；命令消息本身不再转发到 QQ。未命中注册的 /xxx 文本按普通消息继续走
-    // 转发流程（避免回发 Invalid command 刷屏）
-    if (await this.handleDiscordCommand(message, bridge, raw)) return;
+    // Discord 频道；命令消息本身仍按后续流程转发到 QQ（QQ 侧看到的是 bot 代发的文本，
+    // 不会二次执行）。未命中注册的 /xxx 文本同样按普通消息继续走转发流程
+    await this.handleDiscordCommand(message, bridge, raw);
 
     const referenceId = message.reference?.messageId;
     const referenceKey = referenceId ? this.snowflakeToKey(referenceId) : undefined;
@@ -642,7 +642,7 @@ export class DiscordBridge {
     const groupId = Number(bridge.entry.group);
     const source = new DiscordMsgCommandSource(this.bot, message, Number.isSafeInteger(groupId) ? groupId : undefined);
     try {
-      this.bot.getCommandManager().execute(source, normalized);
+      executeCommand(this.bot.getCommandManager(), source, normalized);
     } catch (error) {
       this.bot.logger?.error(
         `[DiscordBridge] Discord 命令执行失败: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`

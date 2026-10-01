@@ -1,4 +1,4 @@
-import { CommandSource } from 'gugle-command';
+import { CommandManager, CommandSource } from 'gugle-command';
 
 /**
  * 平台无关的命令源抽象。
@@ -50,4 +50,77 @@ export function isBotCommandSource(source: CommandSource | undefined): source is
  */
 export function normalizeCommandText(text: string): string {
   return text.startsWith('!') ? `/${text.slice(1)}` : text;
+}
+
+/**
+ * 失败去重代理：同一命令执行周期内，`fail` 只向用户上报第一次。
+ *
+ * 背景：gugle-command 的 `CommandNode.parse()` 在深层匹配失败时已调用一次
+ * `source.fail('Invalid command')`，`CommandManager.execute()` 遍历完所有命名空间后
+ * 又兜底调用一次——`/help abc` 这类「命令存在但参数多余」的输入会向用户回复两条
+ * Invalid command。代理只放行第一次 fail（success 不受影响），修复重复回复。
+ *
+ * 注意：getUserId/getGroupId/isAdmin 按内部源是否有该方法条件绑定，
+ * 保证 isBotCommandSource 鸭子类型检查对代理前后结果一致。
+ */
+class FailOnceCommandSource implements CommandSource {
+  private readonly inner: CommandSource;
+  private failed = false;
+
+  public getUserId?: () => string;
+  public getGroupId?: () => number | undefined;
+  public isAdmin?: () => boolean;
+
+  public constructor(inner: CommandSource) {
+    this.inner = inner;
+    if (isBotCommandSource(inner)) {
+      this.getUserId = () => inner.getUserId();
+      this.getGroupId = () => inner.getGroupId();
+      this.isAdmin = () => inner.isAdmin();
+    }
+  }
+
+  public success(message: string): void {
+    this.inner.success(message);
+  }
+
+  public fail(message: string): void {
+    if (this.failed) return;
+    this.failed = true;
+    this.inner.fail(message);
+  }
+
+  public getName(): string {
+    return this.inner.getName();
+  }
+
+  public hasPermission(permission: string): boolean {
+    return this.inner.hasPermission(permission);
+  }
+}
+
+/**
+ * 执行命令文本（经 FailOnce 代理，重复失败提示只上报一次）。
+ * 所有命令分发入口（QQ 群、Discord 文本、Discord 交互）统一走这里。
+ */
+export function executeCommand(manager: CommandManager, source: CommandSource, command: string): void {
+  manager.execute(new FailOnceCommandSource(source), command);
+}
+
+/**
+ * 以精确 token 序列执行命令（不经字符串切分）。
+ *
+ * 用途：Discord 原生斜杠命令交互——参数值由 Discord 客户端按 option 给出，
+ * 可能包含空格（如 /wiki 的查询词），若拼回字符串再经 gugle-command 按空格切分
+ * 会被打散。这里把 token 逆序后直接喂给各命名空间根节点的 parse：
+ * parse 逐 token 弹出匹配，字符串参数保持完整。
+ *
+ * @param tokens 完整 token 序列，如 ['github', 'bind', 'Gugle'] 或 ['wiki', '下界 合金']
+ */
+export function executeCommandTokens(manager: CommandManager, source: CommandSource, tokens: string[]): void {
+  const wrapped = new FailOnceCommandSource(source);
+  for (const root of manager.roots.values()) {
+    if (root.parse([...tokens].reverse(), wrapped)) return;
+  }
+  wrapped.fail('Invalid command');
 }
