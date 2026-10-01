@@ -47,7 +47,10 @@ export interface RouteInfo {
 export interface HistoryEntry {
   role: string;
   content: string;
+  /** 发言人（user 消息）或回复对象（assistant 消息）的用户 id */
   userId?: string;
+  /** assistant 消息回复对象的发送者标签（用于在历史中标注「你回复 xxx 的话」） */
+  label?: string;
 }
 
 /** 对话会话 */
@@ -87,6 +90,8 @@ export interface RunState {
   lastTextSent: number;
   finalOutput: string;
   userMsgId: number;
+  /** 本轮对话发送者的展示标签（assistant 历史据此标注回复对象） */
+  senderLabel: string;
   stream?: { abort(): void };
 }
 

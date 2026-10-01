@@ -7,6 +7,7 @@ import { getHermesConfig, isHermesAdmin } from '@/features/hermes/config';
 import { HermesClient } from '@/features/hermes/client';
 import { SkillManager } from '@/features/hermes/skills';
 import { ChatHistoryStore } from '@/features/hermes/history';
+import { buildConversationHistory, buildGroupContext } from '@/features/hermes/context';
 import { renderApprovalImage, renderProgressImage } from '@/features/hermes/render';
 import {
   decideGroupTrigger,
@@ -43,6 +44,8 @@ import {
  * - 群聊命令守卫：/ 或 ! 开头的消息不触发（除非显式 @bot），避免与 gugle-command 双重响应；
  * - 审批否定词（不允许/不批准）匹配顺序修正（上游先匹配「批准」导致否定词不可达）；
  * - 不实现 COMPACT_LINES 合并转发（上游默认关闭），长回复按长度切分发送；
+ * - 多人共享历史在提交时按当前对话者标注归属（[群聊背景] / [你回复 xxx 的话]），
+ *   系统提示显式声明当前对话者与标注约定，避免串台认错人（context.ts）；
  * - AI 的群回复经 bot.sendGroupMsg 发出，会按既定行为同步转发到互通的 Discord 频道。
  *
  * Discord 频道触发（对上游的扩展）：
@@ -223,12 +226,17 @@ export class HermesBridge {
     return session?.sessionVersion || 0;
   }
 
-  /** 追加历史消息（内存 + 持久化），跳过空内容 */
-  private appendHistory(key: string, role: string, content: string, userId?: string): void {
+  /** 追加历史消息（内存 + 持久化），跳过空内容；label 用于 assistant 消息标注回复对象 */
+  private appendHistory(key: string, role: string, content: string, userId?: string, label?: string): void {
     if (!content.trim()) return;
     const config = getHermesConfig();
     const session = this.getSession(key);
-    session.history.push({ role, content, ...(userId !== undefined ? { userId } : {}) });
+    session.history.push({
+      role,
+      content,
+      ...(userId !== undefined ? { userId } : {}),
+      ...(label !== undefined ? { label } : {})
+    });
     const max = config.localHistoryMaxMessages * 2;
     if (session.history.length > max) {
       session.history = session.history.slice(-max);
@@ -861,14 +869,10 @@ export class HermesBridge {
     const historyContent = route.type === 'user' ? text : `${senderLabel}: ${text}`;
     this.appendHistory(sessionKey, 'user', historyContent, route.userId);
 
-    // 组装系统提示词：configs/SOUL.md > systemPrompt > 空 + 群聊上下文 + 技能列表
+    // 组装系统提示词：configs/SOUL.md > systemPrompt > 空 + 群聊上下文 + 技能列表。
+    // 群聊上下文显式声明当前对话者与历史标注约定（配合 buildConversationHistory 防串台）
     const baseSystem = this.loadSoulPrompt() || config.systemPrompt || '';
-    const groupContext =
-      route.type === 'group'
-        ? `你正在 QQ 群 ${route.groupId} 中。群聊有多个成员，不同 QQ 号代表不同的人，请根据发送者标识区分。回复请简短口语化，符合 QQ 聊天风格。`
-        : route.type === 'discord'
-          ? `你正在 QQ 群 ${route.groupId} 互通的 Discord 频道 #${route.discord?.channelName ?? ''} 中。聊天有多个成员，不同发送者标识代表不同的人（纯数字为 QQ 号，dc: 前缀为 Discord 用户），请根据发送者标识区分。回复请简短口语化。`
-          : '';
+    const groupContext = route.type === 'user' ? '' : buildGroupContext(route, senderLabel);
     const skillsPrompt = this.skillManager.buildPrompt();
     const systemPrompt = [baseSystem, groupContext, skillsPrompt].filter(Boolean).join('\n\n') || undefined;
 
@@ -877,7 +881,7 @@ export class HermesBridge {
         userMessage,
         sessionId: hermesSessionId,
         ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-        conversationHistory: session.history.slice(0, -1)
+        conversationHistory: buildConversationHistory(session.history.slice(0, -1), route.userId)
       });
 
       bot.logger?.info(`[Hermes] run 已提交: ${runId}`);
@@ -894,7 +898,8 @@ export class HermesBridge {
         sentTextLength: 0,
         lastTextSent: 0,
         finalOutput: '',
-        userMsgId: replyMsgId
+        userMsgId: replyMsgId,
+        senderLabel
       };
       this.activeRuns.set(runId, runState);
 
@@ -1012,7 +1017,7 @@ export class HermesBridge {
     // 运行没有任何输出（SSE 连接失败 / 模型错误等），通知用户并记录空回复占位
     if (!output?.trim()) {
       const errorMsg = '❌ 执行失败：未收到 Hermes 响应，请稍后重试';
-      this.appendHistory(this.getSessionKey(run.route), 'assistant', errorMsg);
+      this.appendHistory(this.getSessionKey(run.route), 'assistant', errorMsg, run.route.userId, run.senderLabel);
       await this.sendReplyWithMention(run.route, errorMsg, run.userMsgId).catch(() => {});
       return;
     }
@@ -1022,7 +1027,8 @@ export class HermesBridge {
       api: this.groupAdminApi(),
       isAdmin: () => this.isRouteAdmin(run.route)
     });
-    this.appendHistory(this.getSessionKey(run.route), 'assistant', output);
+    // 记录回复对象（userId + 展示标签）：历史提交时据其标注「你回复 xxx 的话」，防串台
+    this.appendHistory(this.getSessionKey(run.route), 'assistant', output, run.route.userId, run.senderLabel);
 
     // 解析 MEDIA: 标签，发送图片
     const mediaRegex = /MEDIA:((?:\/|https?:\/\/)[^\s\n]+)/g;
