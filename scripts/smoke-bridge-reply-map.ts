@@ -94,7 +94,8 @@ async function main() {
   }
   check('other-error-propagates', propagated, true);
 
-  // ── 机器人消息门控：webhook 推送不进 need_cmd/need_reply 频道，交互消息无条件放行 ──
+  // ── 机器人消息门控：与普通 QQ 消息同一套语义 ──
+  // 未门控频道全放行；need_cmd/need_reply 频道仅放行「对该频道桥消息的回复」；webhook 一律不进
   const entryOf = (needReply: string, needCmd: string) => ({
     key: '940551045929639949#x',
     guildId: '940551045929639949',
@@ -105,8 +106,16 @@ async function main() {
   check('webhook-skip-need_reply', bridge.shouldForwardBotMessage(entryOf('true', 'false'), true), false);
   check('webhook-skip-both', bridge.shouldForwardBotMessage(entryOf('true', 'true'), true), false);
   check('webhook-allow-open', bridge.shouldForwardBotMessage(entryOf('false', 'false'), true), true);
-  check('interactive-allow-need_cmd', bridge.shouldForwardBotMessage(entryOf('false', 'true'), false), true);
-  check('interactive-allow-need_reply', bridge.shouldForwardBotMessage(entryOf('true', 'false'), false), true);
+  // 交互式消息（AI 回复、#编号卡片、命令回复）：无回复上下文时不进门控频道
+  check('interactive-skip-need_cmd', bridge.shouldForwardBotMessage(entryOf('false', 'true'), false), false);
+  check('interactive-skip-need_reply', bridge.shouldForwardBotMessage(entryOf('true', 'false'), false), false);
+  check('interactive-allow-open', bridge.shouldForwardBotMessage(entryOf('false', 'false'), false), true);
+  // 回复本频道桥消息 → 放行（如 AI 回复 /send 到 QQ 的消息）
+  check('interactive-reply-own-bridge', bridge.shouldForwardBotMessage(entryOf('false', 'true'), false, '940551045929639949#x'), true);
+  // 回复的是别的频道的桥消息 → 仍不进本频道（回复要回到原频道）
+  check('interactive-reply-other-bridge', bridge.shouldForwardBotMessage(entryOf('false', 'true'), false, '940551045929639949#other'), false);
+  // webhook 推送即使带回复上下文也不进门控频道
+  check('webhook-reply-still-skip', bridge.shouldForwardBotMessage(entryOf('false', 'true'), true, '940551045929639949#x'), false);
 
   process.exit(failed === 0 ? 0 : 1);
 }

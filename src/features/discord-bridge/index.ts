@@ -35,8 +35,8 @@ import { handleSlashInteraction, registerSlashCommands } from '@/features/discor
  *
  * 附加能力：
  * - 机器人自身发出的 QQ 群消息转发到该群绑定的频道（经 QQBot.onGroupMessageSent
- *   钩子，fromBridge 标记防止回环）：交互式消息（命令回复、AI 对话等）无条件转发；
- *   webhook 推送（GitHub 订阅通知）尊重门控，不进 need_cmd / need_reply 频道；
+ *   钩子，fromBridge 标记防止回环）：与普通 QQ 消息同一套门控——need_cmd / need_reply
+ *   频道仅放行「对该频道桥消息的回复」，webhook 推送（GitHub 订阅通知）一律不进；
  * - Discord 频道中可直接使用全部已注册命令（/ 或 ! 前缀），回复发在 Discord 频道；
  *   未注册命令的 /xxx 文本按普通消息转发，不会回发 Invalid command；
  * - 同时把命令树注册为 Discord 原生斜杠命令（guild 级、自动补全），交互经 token
@@ -417,8 +417,8 @@ export class DiscordBridge {
    * 机器人自身发出的群消息 → Discord（GitHub 通知、命令回复、AI 对话等）。
    *
    * 由 QQBot.onGroupMessageSent 钩子驱动（OneBot 不回推 bot 自己的 message 事件）。
-   * 交互式机器人消息（命令回复、AI 对话等）无条件转发到该群绑定的所有频道；
-   * webhook 推送（GitHub 订阅通知）尊重频道门控，不进 need_cmd / need_reply 频道。
+   * 门控与普通 QQ 消息一致：need_cmd / need_reply 频道仅放行「对该频道桥消息的回复」
+   * （如 AI 回复 /send 过来的消息），webhook 推送（GitHub 订阅通知）一律不进。
    */
   private async handleQQOutgoingMessage(event: GroupMessageSentEvent): Promise<void> {
     // 桥自身转发到 QQ 的消息必须跳过，否则「Discord→QQ→Discord」形成回环
@@ -495,9 +495,12 @@ export class DiscordBridge {
     const rendered = isDiscordMarkdown(text) ? text : escapeDiscord(text);
     const content = this.truncateDiscord(text ? `${header}\n${rendered}` : header);
 
+    // 「对桥消息的回复」按桥定位来源频道（与普通 QQ 消息门控同一判定）：
+    // AI 回复 /send 到 QQ 的消息等场景可回到原频道，其余机器人消息不进 need_cmd / need_reply 频道
+    const replyBridgeKey = replyQQId !== undefined ? this.bridgeByQQForward.get(replyQQId) : undefined;
+
     for (const bridge of bridges) {
-      // webhook 推送不进 need_cmd / need_reply 频道；交互式机器人消息仍无条件转发
-      if (!this.shouldForwardBotMessage(bridge, event.fromWebhook)) continue;
+      if (!this.shouldForwardBotMessage(bridge, event.fromWebhook, replyBridgeKey)) continue;
       const channel = await this.resolveDiscordChannel(bridge);
       if (!channel) continue;
       try {
@@ -516,12 +519,16 @@ export class DiscordBridge {
   }
 
   /**
-   * 机器人消息门控：webhook 推送（fromWebhook=true）不进 need_cmd / need_reply 频道，
-   * 其余机器人消息（命令回复、AI 对话等交互式消息）无条件放行。
+   * 机器人消息门控（与普通 QQ 用户消息同一套语义）：
+   * - 未开启门控的频道：全部放行；
+   * - need_cmd / need_reply 频道：仅放行「对该频道桥消息的回复」
+   *   （replyBridgeKey 为被回复的 QQ 桥消息来源频道）；webhook 推送一律不进。
    */
-  private shouldForwardBotMessage(bridge: ResolvedBridge, fromWebhook: boolean): boolean {
-    if (!fromWebhook) return true;
-    return bridge.entry.need_cmd !== 'true' && bridge.entry.need_reply !== 'true';
+  private shouldForwardBotMessage(bridge: ResolvedBridge, fromWebhook: boolean, replyBridgeKey?: string): boolean {
+    const gated = bridge.entry.need_cmd === 'true' || bridge.entry.need_reply === 'true';
+    if (!gated) return true;
+    if (fromWebhook) return false;
+    return replyBridgeKey === bridge.key;
   }
 
   /**
