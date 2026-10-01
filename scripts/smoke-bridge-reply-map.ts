@@ -63,6 +63,7 @@ async function main() {
   // sendWithReference：引用不可见 → 降级为无引用重发
   const calls: any[] = [];
   const flakyChannel = {
+    id: 'ch-1',
     send: async (payload: any) => {
       calls.push(payload);
       if (payload.reply) throw new Error('Invalid Form Body\nmessage_reference[MESSAGE_REFERENCE_UNKNOWN_MESSAGE]: Unknown message');
@@ -124,6 +125,7 @@ async function main() {
   };
   const ownMessage = (id: string, content: string, referenceId?: string) => ({
     id,
+    channelId: 'ch-1',
     content,
     attachments: { size: 0 },
     reference: referenceId ? { messageId: referenceId } : null
@@ -145,6 +147,15 @@ async function main() {
   // 无内容占位消息（交互延迟等）不同步
   await bridge.handleOwnDiscordMessage(ownMessage('9000000000000000102', ''), entryOf('false', 'false'));
   check('own-skip-empty', sentToQQ.length, 2);
+
+  // 乱序防回环：messageCreate 先于 registerDiscordMessage 到达（dcFromBridge 尚未登记）时，
+  // 按「频道+正文」待发标记识别桥转发并跳过
+  await bridge.sendWithReference(flakyChannel, { content: '桥转发内容', files: [] }, undefined);
+  await bridge.handleOwnDiscordMessage(ownMessage('9000000000000000200', '桥转发内容'), entryOf('false', 'false'));
+  check('own-skip-pending-send', sentToQQ.length, 2);
+  // 核销只消费一条：同内容第二条（非桥转发）仍放行
+  await bridge.handleOwnDiscordMessage(ownMessage('9000000000000000201', '桥转发内容'), entryOf('false', 'false'));
+  check('own-pending-consumed-once', sentToQQ.length, 3);
 
   process.exit(failed === 0 ? 0 : 1);
 }

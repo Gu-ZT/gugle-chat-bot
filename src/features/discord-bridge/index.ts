@@ -173,6 +173,12 @@ export class DiscordBridge {
   private readonly dcFromBridge = new BoundedCache<true>();
   /** 转发到 QQ 的消息 id → 来源 bridge key（同群多频道时回复要回到原频道） */
   private readonly bridgeByQQForward = new BoundedCache<string>();
+  /**
+   * 桥发往 Discord 的待发消息计数（`${channelId}\n${content}` → 条数）。
+   * messageCreate 回推可能先于 send() 返回（此时 dcFromBridge 尚未登记），
+   * 发送前先登记、回推时核销，保证乱序下也不会把桥转发回传 QQ 形成回环。
+   */
+  private readonly pendingBridgeSends = new Map<string, number>();
 
   private constructor() {}
 
@@ -543,6 +549,10 @@ export class DiscordBridge {
     payload: { content: string; files: { attachment: Buffer; name: string }[] },
     referenceId?: string
   ): Promise<DiscordMessage> {
+    // 发送前登记待发标记：messageCreate 回推可能先于本方法返回，接收侧据此识别桥转发
+    const pendingKey = `${channel.id}\n${payload.content}`;
+    if (this.pendingBridgeSends.size > 500) this.pendingBridgeSends.clear();
+    this.pendingBridgeSends.set(pendingKey, (this.pendingBridgeSends.get(pendingKey) ?? 0) + 1);
     try {
       return await channel.send({
         ...payload,
@@ -675,11 +685,21 @@ export class DiscordBridge {
    * 机器人自己在 Discord 互通频道发出的消息 → QQ（命令回复、AI 回复、GitHub 卡片、
    * 斜杠命令回复等，复用 forwardDiscordToQQ 的渲染/回复链/附件处理）。
    *
-   * 防回环：桥自身 QQ→Discord 的转发已登记 dcFromBridge，直接跳过；
+   * 防回环：桥自身 QQ→Discord 的转发在发送前登记待发标记（pendingBridgeSends，
+   * 兼容 messageCreate 先于 send 返回的乱序）、发送后登记 dcFromBridge，双重识别后跳过；
    * 门控与普通 Discord 消息一致（need_cmd 频道仅放行「对桥消息的回复」）。
    * 转发到 QQ 的消息带 fromBridge 标记且登记为桥消息，QQ 侧回复它可路由回本频道。
    */
   private async handleOwnDiscordMessage(message: DiscordMessage, bridge: ResolvedBridge): Promise<void> {
+    // 乱序防回环：messageCreate 先于 registerDiscordMessage 到达时 dcFromBridge 查不到，
+    // 按「频道+正文」核销发送前登记的待发标记（仅桥转发走 sendWithReference，必然登记）
+    const pendingKey = `${message.channelId}\n${message.content ?? ''}`;
+    const pending = this.pendingBridgeSends.get(pendingKey) ?? 0;
+    if (pending > 0) {
+      if (pending === 1) this.pendingBridgeSends.delete(pendingKey);
+      else this.pendingBridgeSends.set(pendingKey, pending - 1);
+      return;
+    }
     if (this.dcFromBridge.get(this.snowflakeToKey(message.id)) === true) return;
     // 交互延迟占位等无内容消息不同步
     if (!message.content && message.attachments.size === 0) return;
