@@ -7,6 +7,7 @@ import { DiscordMsgCommandSource, isDiscordAdmin } from '@/features/discord-brid
 import { executeCommand, normalizeCommandText } from '@/command';
 import { Github } from '@/features/github';
 import { HermesBridge } from '@/features/hermes';
+import { handleSlashInteraction, registerSlashCommands } from '@/features/discord-bridge/slash';
 
 /**
  * QQ 群 ⇄ Discord 频道互通模块。
@@ -38,6 +39,8 @@ import { HermesBridge } from '@/features/hermes';
  *   webhook 推送（GitHub 订阅通知）尊重门控，不进 need_cmd / need_reply 频道；
  * - Discord 频道中可直接使用全部已注册命令（/ 或 ! 前缀），回复发在 Discord 频道；
  *   未注册命令的 /xxx 文本按普通消息转发，不会回发 Invalid command；
+ * - 同时把命令树注册为 Discord 原生斜杠命令（guild 级、自动补全），交互经 token
+ *   精确回放执行，回复发在 Discord 频道（需邀请链接含 applications.commands 权限）；
  * - Discord 消息中的 `#编号` / `owner/repo#编号` 会查询 GitHub Issue/PR 并以图片卡片
  *   回复在 Discord 频道（一条消息多个编号全部解析，与 QQ 侧同一套渲染）；
  * - 互通频道消息可触发 Hermes AI（审批回复 /@提及 / 关键词），频道是否启用由其桥接的
@@ -210,6 +213,27 @@ export class DiscordBridge {
     });
     this.client.once('clientReady', client => {
       this.bot?.logger?.info(`[DiscordBridge] 已登录 Discord：${client.user.tag}`);
+      // 注册原生斜杠命令（guild 级即时生效；bridges 配置去重的全部服务器）
+      const guildIds = [...new Set(Object.keys(getDiscordBridgeConfig().bridges).map(key => key.split('#')[0]!))];
+      registerSlashCommands(client, guildIds, bot).catch(error => {
+        this.bot?.logger?.error(
+          `[DiscordBridge] 注册斜杠命令异常: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`
+        );
+      });
+    });
+    // 原生斜杠命令交互：经 token 精确回放交给 gugle-command 执行，回复发在 Discord
+    this.client.on('interactionCreate', interaction => {
+      if (!interaction.isChatInputCommand() || !this.bot) return;
+      const bot = this.bot;
+      handleSlashInteraction(bot, interaction, (guildId, channelName) => {
+        const bridge = channelName ? this.resolveByChannel(guildId, channelName) : undefined;
+        const group = bridge ? Number(bridge.entry.group) : NaN;
+        return Number.isSafeInteger(group) ? group : undefined;
+      }).catch(error => {
+        bot.logger?.error(
+          `[DiscordBridge] 斜杠命令交互失败: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`
+        );
+      });
     });
     this.client.login(token).catch(error => {
       this.bot?.logger?.error(
