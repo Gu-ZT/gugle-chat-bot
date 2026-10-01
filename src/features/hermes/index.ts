@@ -7,7 +7,9 @@ import { getHermesConfig, isHermesAdmin } from '@/features/hermes/config';
 import { HermesClient } from '@/features/hermes/client';
 import { SkillManager } from '@/features/hermes/skills';
 import { ChatHistoryStore } from '@/features/hermes/history';
-import { buildConversationHistory, buildGroupContext } from '@/features/hermes/context';
+import { buildConversationHistory, buildGroupContext, appendAutoCardNote } from '@/features/hermes/context';
+import { Github } from '@/features/github';
+import { isGithubEnabledGroup } from '@/config/features';
 import { renderApprovalImage, renderProgressImage } from '@/features/hermes/render';
 import {
   decideGroupTrigger,
@@ -179,6 +181,18 @@ export class HermesBridge {
       .map(segment => (segment.type === 'text' ? segment.data.text : ''))
       .join('')
       .trim();
+  }
+
+  /**
+   * 统计消息中会被消息管道自动渲染卡片的 Issue/PR 引用数
+   * （该群启用 github 功能且仓库在允许列表内；私聊无自动卡片，返回 0）。
+   * 与 Github.processMessage / processDiscordMessage 的自动发卡口径一致。
+   */
+  private countAutoCardReferences(text: string, route: RouteInfo): number {
+    if (route.type === 'user' || !route.groupId) return 0;
+    const groupId = Number(route.groupId);
+    if (!Number.isSafeInteger(groupId) || !isGithubEnabledGroup(groupId)) return 0;
+    return Github.parseReferences(text).filter(reference => Github.isAllowedRepository(reference.repository)).length;
   }
 
   /** 发送者展示名：群名片（昵称）或昵称或 QQ 号 */
@@ -665,7 +679,8 @@ export class HermesBridge {
     bot.logger?.info(`[Hermes] 触发: ${reason} from ${route.userId} in ${route.type}:${route.groupId || route.userId}`);
 
     const formatted = await this.formatMessage(msg.message, msg.message_type === 'group' ? msg.group_id : undefined);
-    const text = formatted.text;
+    // 消息中的 #编号 会被消息管道自动渲染卡片时加注记，避免 AI 再调查Issue技能重复发卡
+    const text = appendAutoCardNote(formatted.text, this.countAutoCardReferences(formatted.text, route));
     if (!text) return;
 
     // 停止命令
@@ -739,7 +754,8 @@ export class HermesBridge {
     );
 
     const formatted = await this.formatDiscordMessage(message, params.botUserId);
-    const text = formatted.text;
+    // 与 QQ 侧同理：#编号 已由 DiscordBridge 自动渲染卡片时加注记，避免技能重复发卡
+    const text = appendAutoCardNote(formatted.text, this.countAutoCardReferences(formatted.text, route));
     if (!text) return;
 
     if (isStopCommand(text)) {

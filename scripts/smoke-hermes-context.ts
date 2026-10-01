@@ -1,6 +1,8 @@
 // Hermes 会话上下文组装（纯函数）：多人共享历史按当前对话者标注归属，防串台
 async function main() {
-  const { buildConversationHistory, buildGroupContext, BG_PREFIX } = await import('../src/features/hermes/context');
+  const { buildConversationHistory, buildGroupContext, appendAutoCardNote, BG_PREFIX } = await import(
+    '../src/features/hermes/context'
+  );
 
   let failed = 0;
   const check = (name: string, got: unknown, want: unknown) => {
@@ -57,6 +59,12 @@ async function main() {
   );
   check('discord-ctx-channel', dcCtx.includes('#'), true);
   check('discord-ctx-current-speaker', dcCtx.includes('当前与你对话的是 Gugle (dc:555)'), true);
+
+  // 自动卡片注记：有自动卡片时追加提示避免技能重复发卡，无则原文返回
+  const noted = appendAutoCardNote('帮我看看 #1234 是什么', 1);
+  check('auto-card-note-appended', noted.includes('系统自动生成信息卡片') && noted.includes('不要再调用查Issue技能'), true);
+  check('auto-card-note-keeps-text', noted.startsWith('帮我看看 #1234 是什么'), true);
+  check('auto-card-note-zero', appendAutoCardNote('普通消息', 0), '普通消息');
 
   process.exit(failed === 0 ? 0 : 1);
 }

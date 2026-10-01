@@ -53,3 +53,15 @@ export function buildGroupContext(route: RouteInfo, senderLabel: string): string
     `当前与你对话的是 ${senderLabel}，只需回应 TA 的消息。回复简短口语化，符合聊天风格。`
   ].join('\n');
 }
+
+/**
+ * 消息中的 Issue/PR 编号会被消息管道自动渲染卡片时，给 AI 输入追加注记，
+ * 避免 AI 再调用查Issue技能重复发同一张卡片（autoCardCount=0 时原样返回）。
+ */
+export function appendAutoCardNote(text: string, autoCardCount: number): string {
+  if (autoCardCount <= 0) return text;
+  return (
+    `${text}\n（系统提示：本条消息中的 ${autoCardCount} 个 Issue/PR 编号已由系统自动生成信息卡片并发出，` +
+    `请直接据此回答，不要再调用查Issue技能重复发送卡片）`
+  );
+}
