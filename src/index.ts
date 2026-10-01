@@ -22,6 +22,12 @@ export interface SendGroupMsgOptions {
    * 发送出口监听器据此跳过，避免「转发出去的消息又被转发回 Discord」形成回环。
    */
   fromBridge?: boolean;
+  /**
+   * 标记该消息由 webhook 事件推送（GitHub issue/PR/release 订阅通知）。
+   * 互通桥据此尊重频道门控：不转发到 need_cmd / need_reply 为 true 的频道
+   * （命令回复、AI 对话等交互式机器人消息不受此限）。
+   */
+  fromWebhook?: boolean;
 }
 
 /** bot.sendGroupMsg 成功后的通知负载（供互通桥把机器人自身消息转发到 Discord） */
@@ -32,6 +38,8 @@ export interface GroupMessageSentEvent {
   messageId: number | undefined;
   /** 是否由互通桥自身发出（true 时监听方应忽略） */
   fromBridge: boolean;
+  /** 是否由 webhook 事件推送（true 时互通桥尊重频道门控） */
+  fromWebhook: boolean;
 }
 
 export class GroupMsgCommandSource implements BotCommandSource {
@@ -389,7 +397,8 @@ export class QQBot {
               groupId: Number(groupId),
               message,
               messageId,
-              fromBridge: options?.fromBridge === true
+              fromBridge: options?.fromBridge === true,
+              fromWebhook: options?.fromWebhook === true
             });
             resolve(messageId);
           })

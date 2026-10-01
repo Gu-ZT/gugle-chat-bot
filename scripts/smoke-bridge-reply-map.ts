@@ -94,6 +94,20 @@ async function main() {
   }
   check('other-error-propagates', propagated, true);
 
+  // ── 机器人消息门控：webhook 推送不进 need_cmd/need_reply 频道，交互消息无条件放行 ──
+  const entryOf = (needReply: string, needCmd: string) => ({
+    key: '940551045929639949#x',
+    guildId: '940551045929639949',
+    channelName: 'x',
+    entry: { group: '659356928', need_reply: needReply, need_cmd: needCmd }
+  });
+  check('webhook-skip-need_cmd', bridge.shouldForwardBotMessage(entryOf('false', 'true'), true), false);
+  check('webhook-skip-need_reply', bridge.shouldForwardBotMessage(entryOf('true', 'false'), true), false);
+  check('webhook-skip-both', bridge.shouldForwardBotMessage(entryOf('true', 'true'), true), false);
+  check('webhook-allow-open', bridge.shouldForwardBotMessage(entryOf('false', 'false'), true), true);
+  check('interactive-allow-need_cmd', bridge.shouldForwardBotMessage(entryOf('false', 'true'), false), true);
+  check('interactive-allow-need_reply', bridge.shouldForwardBotMessage(entryOf('true', 'false'), false), true);
+
   process.exit(failed === 0 ? 0 : 1);
 }
 

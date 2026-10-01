@@ -33,8 +33,9 @@ import { HermesBridge } from '@/features/hermes';
  * - `/send` 不填目标时默认发送到配置文件中第一个互通条目的对端。
  *
  * 附加能力：
- * - 机器人自身发出的 QQ 群消息（GitHub 通知、命令回复等）无条件转发到该群绑定的
- *   所有频道（经 QQBot.onGroupMessageSent 钩子，fromBridge 标记防止回环）；
+ * - 机器人自身发出的 QQ 群消息转发到该群绑定的频道（经 QQBot.onGroupMessageSent
+ *   钩子，fromBridge 标记防止回环）：交互式消息（命令回复、AI 对话等）无条件转发；
+ *   webhook 推送（GitHub 订阅通知）尊重门控，不进 need_cmd / need_reply 频道；
  * - Discord 频道中可直接使用全部已注册命令（/ 或 ! 前缀），回复发在 Discord 频道；
  *   未注册命令的 /xxx 文本按普通消息转发，不会回发 Invalid command；
  * - Discord 消息中的 `#编号` / `owner/repo#编号` 会查询 GitHub Issue/PR 并以图片卡片
@@ -389,11 +390,11 @@ export class DiscordBridge {
   }
 
   /**
-   * 机器人自身发出的群消息 → Discord（GitHub 通知、命令回复等）。
+   * 机器人自身发出的群消息 → Discord（GitHub 通知、命令回复、AI 对话等）。
    *
    * 由 QQBot.onGroupMessageSent 钩子驱动（OneBot 不回推 bot 自己的 message 事件）。
-   * 机器人消息无条件转发到该群绑定的所有频道——need_cmd / need_reply 门控只针对
-   * 普通用户消息，否则 GitHub 通知等机器人消息永远到不了 Discord。
+   * 交互式机器人消息（命令回复、AI 对话等）无条件转发到该群绑定的所有频道；
+   * webhook 推送（GitHub 订阅通知）尊重频道门控，不进 need_cmd / need_reply 频道。
    */
   private async handleQQOutgoingMessage(event: GroupMessageSentEvent): Promise<void> {
     // 桥自身转发到 QQ 的消息必须跳过，否则「Discord→QQ→Discord」形成回环
@@ -471,6 +472,8 @@ export class DiscordBridge {
     const content = this.truncateDiscord(text ? `${header}\n${rendered}` : header);
 
     for (const bridge of bridges) {
+      // webhook 推送不进 need_cmd / need_reply 频道；交互式机器人消息仍无条件转发
+      if (!this.shouldForwardBotMessage(bridge, event.fromWebhook)) continue;
       const channel = await this.resolveDiscordChannel(bridge);
       if (!channel) continue;
       try {
@@ -486,6 +489,15 @@ export class DiscordBridge {
         );
       }
     }
+  }
+
+  /**
+   * 机器人消息门控：webhook 推送（fromWebhook=true）不进 need_cmd / need_reply 频道，
+   * 其余机器人消息（命令回复、AI 对话等交互式消息）无条件放行。
+   */
+  private shouldForwardBotMessage(bridge: ResolvedBridge, fromWebhook: boolean): boolean {
+    if (!fromWebhook) return true;
+    return bridge.entry.need_cmd !== 'true' && bridge.entry.need_reply !== 'true';
   }
 
   /**

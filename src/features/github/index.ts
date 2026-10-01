@@ -135,7 +135,8 @@ export class Github {
           }
         ];
         subscribers.forEach(group => {
-          bot.sendGroupMsg(group, msg);
+          // fromWebhook：标记为 webhook 推送，互通桥据此不转发到 need_cmd/need_reply 频道
+          bot.sendGroupMsg(group, msg, { fromWebhook: true });
         });
         this.logger?.debug(`Sent process ${type} message of ${repository} to ${subscribers.length} group(s)...`);
       })
