@@ -3,6 +3,8 @@
  * OneBot 消息段类型复用 @/type，此处只保留 Hermes API / 会话 / 审批 / 技能相关类型。
  */
 
+import type { QQBot } from '@/index';
+
 // ── 路由 ──
 
 /**
@@ -203,10 +205,18 @@ export interface GroupAdminApi {
 
 /** 技能执行上下文 */
 export interface SkillExecuteContext {
+  /** QQBot 实例（卡片类技能经其 axiosInstance/logger 访问外部 API 与渲染） */
+  bot: QQBot;
   api: GroupAdminApi;
   route: RouteInfo;
   args: string[];
 }
+
+/**
+ * 技能执行产出：纯文本摘要字符串，或 `{ message, images }`——
+ * images 为待发送的 base64 图片（允许带 base64:// 前缀），由完成处理器逐张发出。
+ */
+export type SkillExecution = string | { message: string; images?: string[] };
 
 /** 技能定义 */
 export interface Skill {
@@ -214,11 +224,19 @@ export interface Skill {
   usage: string;
   description: string;
   adminOnly: boolean;
-  execute(ctx: SkillExecuteContext): Promise<string>;
+  execute(ctx: SkillExecuteContext): Promise<SkillExecution>;
 }
 
 /** 技能执行结果 */
-export type SkillResult = { ok: true; skill: string; message: string } | { ok: false; skill: string; error: string };
+export type SkillResult =
+  | { ok: true; skill: string; message: string; images?: string[] }
+  | { ok: false; skill: string; error: string };
+
+/** processTags 的返回：清理后的文本 + 全部技能产出的图片 */
+export interface ProcessedSkillOutput {
+  text: string;
+  images: string[];
+}
 
 // ── 多模态消息内容 ──
 

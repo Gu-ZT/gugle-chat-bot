@@ -46,6 +46,8 @@ import {
  * - 不实现 COMPACT_LINES 合并转发（上游默认关闭），长回复按长度切分发送；
  * - 多人共享历史在提交时按当前对话者标注归属（[群聊背景] / [你回复 xxx 的话]），
  *   系统提示显式声明当前对话者与标注约定，避免串台认错人（context.ts）；
+ * - 技能系统在群管理技能之外扩展卡片类公共技能（查Issue / B站视频），技能可产出
+ *   base64 图片，由完成处理器逐张发送（复用 github / bili 功能的渲染管线）；
  * - AI 的群回复经 bot.sendGroupMsg 发出，会按既定行为同步转发到互通的 Discord 频道。
  *
  * Discord 频道触发（对上游的扩展）：
@@ -1022,11 +1024,21 @@ export class HermesBridge {
       return;
     }
 
-    // 执行技能标签（管理技能的权限按路由发送者判定：QQ 取 operators，Discord 取服务器权限）
-    output = await this.skillManager.processTags(output, run.route, {
-      api: this.groupAdminApi(),
-      isAdmin: () => this.isRouteAdmin(run.route)
-    });
+    // 执行技能标签（管理技能的权限按路由发送者判定：QQ 取 operators，Discord 取服务器权限）；
+    // 卡片类技能产出的图片在文本发送前逐张发出
+    if (this.bot) {
+      const skillOutput = await this.skillManager.processTags(output, run.route, {
+        bot: this.bot,
+        api: this.groupAdminApi(),
+        isAdmin: () => this.isRouteAdmin(run.route)
+      });
+      output = skillOutput.text;
+      for (const image of skillOutput.images) {
+        await this.sendReplyImage(run.route, image).catch(error => {
+          this.bot?.logger?.error(`[Hermes] 技能卡片发送失败: ${(error as Error).message}`);
+        });
+      }
+    }
     // 记录回复对象（userId + 展示标签）：历史提交时据其标注「你回复 xxx 的话」，防串台
     this.appendHistory(this.getSessionKey(run.route), 'assistant', output, run.route.userId, run.senderLabel);
 
