@@ -120,17 +120,27 @@ export class GroupMsgCommandSource implements BotCommandSource {
 }
 
 export class QQBot {
+  /** 断线后的最大重连次数 */
+  private static readonly MAX_RECONNECT_ATTEMPTS = 10;
+  /** 重连基础退避时长（毫秒）：第 n 次重试等待 BASE * 2^(n-1) */
+  private static readonly RECONNECT_BASE_DELAY_MS = 2000;
+  /** 单次退避上限（毫秒）：指数增长到此值后不再增大，避免等待时间失控 */
+  private static readonly RECONNECT_MAX_DELAY_MS = 60000;
+
   private loginInfo?: LoginInfoData = undefined;
   private path: string = process.cwd();
   logger?: Logger;
   private readonly config: BotConfig;
   public readonly axiosInstance: AxiosInstance;
-  private readonly ws: WebSocket;
+  private ws?: WebSocket;
   private readonly eventManager: EventManager;
   private readonly commandManager: CommandManager;
   private wsOpened: boolean = false;
   private lastHeartbeatTime: number = 0;
   private checkHeartbeatFunc?: NodeJS.Timeout = undefined;
+  private reconnectFunc?: NodeJS.Timeout = undefined;
+  private reconnectAttempts: number = 0;
+  private stopping: boolean = false;
   private operationQueue: (() => void)[] = [];
   private lastOperationHandle = -1;
   /** bot.sendGroupMsg 成功后的监听器（互通桥用它转发机器人自身消息到 Discord） */
@@ -140,7 +150,6 @@ export class QQBot {
     this.config = config;
     this.eventManager = new EventManager();
     this.commandManager = new CommandManager();
-    this.ws = new WebSocket(`${config.wsUrl}/${config.tokenParams}${config.wsToken}`);
     this.axiosInstance = axios.create({
       timeout: 15000,
       baseURL: config.httpUrl,
@@ -150,22 +159,65 @@ export class QQBot {
         'User-Agent': config.userAgent
       }
     });
-    this.ws.on('error', (e: Error) => {
-      let message = e.message;
-      const stack = e.stack;
-      if (message.endsWith('401')) {
-        this.logger?.error(`${stack}`);
-        message = '无法连接至 WebSocket 服务器，请检查你的 Token！ ';
-        throw new Error(message);
-      }
-      throw e;
-    });
-    this.ws.on('open', () => {
-      // 标记WebSocket连接已打开
-      this.wsOpened = true;
-      this.checkHeartbeatFunc = setTimeout(() => this.checkHeartbeat(this), 40000);
-    });
     setInterval(() => this.handlerOperationQueue(this), 2000);
+  }
+
+  /**
+   * 建立 WebSocket 连接并注册事件处理。
+   * 连接失败或断开时由 close 事件统一触发退避重连，因此这里可以安全地重复调用。
+   */
+  private connect(): void {
+    const bot = this;
+    bot.ws = new WebSocket(`${bot.config.wsUrl}/${bot.config.tokenParams}${bot.config.wsToken}`);
+    bot.ws.on('open', () => {
+      bot.wsOpened = true;
+      bot.lastHeartbeatTime = Date.now();
+      bot.logger?.info('WebSocket connected');
+      bot.checkHeartbeatFunc = setTimeout(() => bot.checkHeartbeat(bot), 40000);
+      bot
+        .getLoginInfo()
+        .then(info => {
+          bot.loginInfo = info;
+        })
+        .catch((error: Error) => {
+          bot.logger?.error(`获取登录信息失败：${error.message}`);
+        });
+    });
+    bot.ws.on('message', rawData => {
+      bot.post('websocket-message', bot, rawData).then();
+    });
+    bot.ws.on('error', (error: Error) => {
+      if (error.message.endsWith('401')) {
+        bot.logger?.error(`无法连接至 WebSocket 服务器，请检查你的 Token！${error.stack}`);
+        return;
+      }
+      bot.logger?.error(`WebSocket error: ${error.stack ?? error.message}`);
+    });
+    bot.ws.on('close', (code: number, reason: Buffer) => {
+      bot.wsOpened = false;
+      clearTimeout(bot.checkHeartbeatFunc);
+      bot.logger?.warn(`WebSocket closed: ${code} ${reason.toString('utf-8')}`);
+      if (bot.stopping) return;
+      bot.scheduleReconnect();
+    });
+  }
+
+  /** 按指数退避安排下一次重连；达到上限后记录错误并停止重连 */
+  private scheduleReconnect(): void {
+    const bot = this;
+    if (bot.reconnectAttempts >= QQBot.MAX_RECONNECT_ATTEMPTS) {
+      bot.logger?.error(`WebSocket 重连已达上限（${QQBot.MAX_RECONNECT_ATTEMPTS} 次），停止重连`);
+      return;
+    }
+    bot.reconnectAttempts++;
+    const delay = Math.min(
+      QQBot.RECONNECT_BASE_DELAY_MS * 2 ** (bot.reconnectAttempts - 1),
+      QQBot.RECONNECT_MAX_DELAY_MS
+    );
+    bot.logger?.warn(
+      `WebSocket 连接已断开，${delay}ms 后发起第 ${bot.reconnectAttempts}/${QQBot.MAX_RECONNECT_ATTEMPTS} 次重连`
+    );
+    bot.reconnectFunc = setTimeout(() => bot.connect(), delay);
   }
 
   public async start(path: string = process.cwd()): Promise<QQBot> {
@@ -190,24 +242,25 @@ export class QQBot {
         bot.listen('websocket-message', bot.onWebsocketMsg);
         bot.listen('meta-event-heartbeat', bot.onHeartbeat);
         bot.listen('message-event-group', bot.onGroupMsg);
-        bot.ws.on('message', rawData => {
-          bot.post('websocket-message', bot, rawData);
-        });
-        bot.getLoginInfo().then(loginInfo => {
-          bot.loginInfo = loginInfo;
-        });
+        bot.connect();
         bot.post('command-register', bot, this.commandManager).then();
         bot.post('after-start', bot).then();
+        resolve(bot);
+      }).catch((error: Error) => {
+        bot.logger?.error(`启动流程失败：${error.stack ?? error.message}`);
         resolve(bot);
       });
     });
   }
 
   public stop(): QQBot {
+    this.stopping = true;
+    clearTimeout(this.reconnectFunc);
+    clearTimeout(this.checkHeartbeatFunc);
     // 在停止之前触发'before-stop'事件，传递当前实例
     this.post('before-stop', this).then(() => {
       // 如果WebSocket连接是打开的状态，关闭连接
-      if (this.wsOpened) this.ws.close();
+      if (this.wsOpened) this.ws?.close();
       // 在停止之后触发'after-stop'事件，传递当前实例
       this.post('after-stop', this).then();
     });
@@ -218,10 +271,14 @@ export class QQBot {
     return await this.eventManager.post(event, ...args);
   }
 
+  /**
+   * 心跳超时检测：超过 100 秒未收到心跳视为连接已断开，主动关闭以触发重连。
+   * lastHeartbeatTime 记录的是「本次连接开始等待心跳的时刻」，避免刚连上就误判超时。
+   */
   private checkHeartbeat(bot: QQBot) {
     if (Date.now() - bot.lastHeartbeatTime > 100000) {
-      bot.logger?.error('WebSocket connection lost, reconnecting...');
-      bot.ws.terminate();
+      bot.logger?.error('WebSocket 心跳超时，重建连接...');
+      bot.ws?.terminate();
     } else {
       bot.checkHeartbeatFunc = setTimeout(() => bot.checkHeartbeat(bot), 40000);
     }
@@ -255,7 +312,14 @@ export class QQBot {
   }
 
   private onWebsocketMsg(bot: QQBot, data: RawData) {
-    const msg: WSMSG = JSON.parse(data.toString('utf-8'));
+    let msg: WSMSG;
+    try {
+      msg = JSON.parse(data.toString('utf-8'));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      bot.logger?.error(`解析 WebSocket 消息失败：${reason}`);
+      return;
+    }
     bot.logger?.debug(`Received message: ${JSON.stringify(msg)}`);
     let eventName = 'unknown-event';
     if (msg.post_type == 'meta_event') {
@@ -277,6 +341,9 @@ export class QQBot {
 
   private onHeartbeat(bot: QQBot, data: RawData) {
     bot.logger?.debug(`Received heartbeat: ${JSON.stringify(data)}`);
+    // 收到心跳才说明对端确实在工作，此时才视为连接真正恢复并清零重连计数；
+    // 仅握手成功（open）不足以判断，napcat 不可用时也会完成握手后立即断开。
+    bot.reconnectAttempts = 0;
     bot.lastHeartbeatTime = Date.now();
     clearTimeout(bot.checkHeartbeatFunc);
     bot.checkHeartbeatFunc = setTimeout(() => bot.checkHeartbeat(bot), 40000);
@@ -316,12 +383,11 @@ export class QQBot {
   /**
    * 定义一个 cron 装饰器，用于根据给定的 cron 表达式调度任务
    *
-   * @param _cron cron 表达式，用于指定任务执行的时间
+   * @param _cron cron 表达式，六位格式：秒 分 时 日 月 周；秒与分使用步进语法（星号加斜杠步长）
    * @returns {(executor: (bot: QQBot) => void) => void} 返回一个函数，该函数接受一个执行器函数作为参数，并在指定时间执行该执行器函数
    *
    * @example
-   * @ bot.cron('0/30 * * * * *')
-   * public cron(bot: HeyBoxBot): void {}
+   * 每 30 秒执行一次：秒字段写步进 30，其余字段写星号
    */
   public cron(_cron: string): (executor: (bot: QQBot) => void) => void {
     // 保存当前实例的引用，以便在后续的执行器函数中使用
@@ -329,10 +395,15 @@ export class QQBot {
     const self: QQBot = this;
     // 返回一个函数，该函数负责调度执行器函数
     return function (executor: (bot: QQBot) => void) {
-      // 使用 cron 表达式调度任务，当时间匹配时执行执行器函数
-      cron.schedule(_cron, () => {
-        executor(self);
-      });
+      // 表达式非法时 cron.schedule 会直接抛出，这里记录带表达式的错误便于定位
+      try {
+        cron.schedule(_cron, () => {
+          executor(self);
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        self.logger?.error(`cron 表达式非法（${_cron}）：${reason}`);
+      }
     };
   }
 

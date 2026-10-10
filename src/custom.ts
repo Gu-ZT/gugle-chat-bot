@@ -366,7 +366,7 @@ ${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings 
     });
   }
 
-  @bot.cron('0/30 * * * * *')
+  @bot.cron('*/30 * * * * *')
   public cronCheckMinecraftVersion() {
     MinecraftAPI.getVersion().then(version => {
       if (!version.success) return;
