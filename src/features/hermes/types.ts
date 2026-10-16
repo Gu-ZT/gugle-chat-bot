@@ -108,6 +108,12 @@ export interface RunState {
   receiptId?: number;
   /** 回执是否已转移给查询技能的回喂轮（转移后由下一轮负责撤回） */
   receiptTransferred?: boolean;
+  /**
+   * 发送串行链：所有逐句/尾段发送都挂到这条链上按序执行。
+   * message.delta 的 flush 是 fire-and-forget，若并发执行会互相插队，
+   * 导致分条消息顺序错乱（后一批的句子插到前一批未发完的句子之前）。
+   */
+  sendChain?: Promise<void>;
   stream?: { abort(): void };
 }
 

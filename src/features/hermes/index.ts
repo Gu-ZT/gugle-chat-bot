@@ -428,10 +428,70 @@ export class HermesBridge {
   }
 
   /**
+   * 把一段发送任务挂到会话的串行链上，保证按调用顺序执行。
+   *
+   * message.delta 的逐句下发展开是 fire-and-forget（不能阻塞 SSE 事件流），
+   * 若各自并发 await 发送，后一次 flush 的句子会插到前一次未发完的句子之前，
+   * 群聊里就出现「一、尾句、二、三」这种错序。因此所有 AI 文本发送统一经此串行化。
+   * 返回的 Promise 在该段发送完成后 resolve（调用方可按需 await）。
+   */
+  private enqueueSend(run: RunState | undefined, task: () => Promise<void>): Promise<void> {
+    if (!run) return task();
+    const previous = run.sendChain ?? Promise.resolve();
+    // 前一段失败不影响后续发送：链上只传递完成信号
+    const next = previous.then(task, task);
+    run.sendChain = next.catch(() => {});
+    return next;
+  }
+
+  /** 等待串行链上全部发送完成（finishRun 收尾与测试用） */
+  private async drainSends(run: RunState): Promise<void> {
+    // 链尾可能仍在追加，循环等到稳定
+    let current = run.sendChain;
+    while (current) {
+      await current.catch(() => {});
+      if (current === run.sendChain) return;
+      current = run.sendChain;
+    }
+  }
+
+  /**
    * 发送一条群聊 AI 回复单元：超阈值走聊天记录，否则普通文本。
    * 引用段仅贴在本轮首个单元上（阶梯式回复，避免每条都重复引用）。
    */
   private async sendReplyUnit(route: RouteInfo, unit: ReplyUnit, replyMsgId: number, run?: RunState): Promise<void> {
+    await this.sendReplyUnits(route, [unit], replyMsgId, run);
+  }
+
+  /**
+   * 批量发送回复单元：整批作为串行链上的**一个任务**执行。
+   *
+   * 必须是整批入链而不是逐条入链：message.delta 的 flush 是 fire-and-forget，
+   * 若逐条入链，下一批会在「上一批还没发完」时把自己的任务追加到链上，
+   * 于是上一批剩余的句子被排到下一批之后，群聊里出现
+   * 「一一得一 / 尾句 / 一二得二 / 一三得三」这种错序。
+   */
+  private async sendReplyUnits(
+    route: RouteInfo,
+    units: ReplyUnit[],
+    replyMsgId: number,
+    run?: RunState
+  ): Promise<void> {
+    if (units.length === 0) return;
+    await this.enqueueSend(run, async () => {
+      for (const unit of units) {
+        await this.sendSingleUnit(route, unit, replyMsgId, run);
+      }
+    });
+  }
+
+  /** 单条单元的实际发送（不做排队，仅供串行链内部调用） */
+  private async sendSingleUnit(
+    route: RouteInfo,
+    unit: ReplyUnit,
+    replyMsgId: number,
+    run?: RunState
+  ): Promise<void> {
     if (unit.asForward) {
       await this.sendGroupForward(route, unit.text);
       if (run) await this.recallReceiptOnce(run);
@@ -483,9 +543,8 @@ export class HermesBridge {
     }
     if (RESERVED_LABEL_RE.test(text)) return;
     const units = splitReplyIntoUnits(text, this.replyUnitOptions());
-    for (const unit of units) {
-      await this.sendReplyUnit(route, unit, replyMsgId, run);
-    }
+    // 整批入链：保证本批句子连续发出，不被后续 flush 插队
+    await this.sendReplyUnits(route, units, replyMsgId, run);
   }
 
   /**
@@ -502,9 +561,8 @@ export class HermesBridge {
     if (units.length === 0) return;
     run.sentTextLength = run.messageDelta.length;
     run.lastTextSent = Date.now();
-    for (const unit of units) {
-      await this.sendReplyUnit(run.route, unit, run.userMsgId, run);
-    }
+    // 整批入链（内部按序发完），避免与后续 flush 交错
+    await this.sendReplyUnits(run.route, units, run.userMsgId, run);
   }
 
   // ===================================================================
@@ -1042,9 +1100,13 @@ export class HermesBridge {
         runState.lastTextSent = Date.now();
         try {
           if (this.useReplyUnits(runState.route)) {
-            for (const unit of splitReplyIntoUnits(pending, this.replyUnitOptions())) {
-              await this.sendReplyUnit(runState.route, unit, runState.userMsgId, runState);
-            }
+            // 整批入链，避免被随后到达的 delta flush 插队
+            await this.sendReplyUnits(
+              runState.route,
+              splitReplyIntoUnits(pending, this.replyUnitOptions()),
+              runState.userMsgId,
+              runState
+            );
           } else {
             await this.sendReply(runState.route, pending.trim());
           }
@@ -1198,6 +1260,8 @@ export class HermesBridge {
 
   /** finishRun 主体（拆出以便统一在 finally 中撤回私聊回执） */
   private async finishRunBody(run: RunState, markKeepReaction: () => void): Promise<void> {
+    // 先等在途的逐句下发完成，再计算/发送尾段，否则尾段会插到未发完的句子之前
+    await this.drainSends(run);
     let output = run.finalOutput || run.messageDelta;
 
     // 逐句下发过时，remainingText 由流式路径负责；这里只处理「尚未下发的尾段」。
