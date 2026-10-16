@@ -2,12 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Message as DiscordMessage } from 'discord.js';
 import { QQBot } from '@/index';
-import { ForwardMessage, GroupMessageWSMSG, Message, PrivateMessageWSMSG, ReceiveMessage } from '@/type';
+import { GroupMessageWSMSG, PrivateMessageWSMSG, ReceiveMessage, SentMessage } from '@/type';
 import { getHermesConfig, isHermesAdmin } from '@/features/hermes/config';
 import { HermesClient } from '@/features/hermes/client';
 import { SkillManager } from '@/features/hermes/skills';
 import { ChatHistoryStore } from '@/features/hermes/history';
 import { buildConversationHistory, buildGroupContext, appendAutoCardNote } from '@/features/hermes/context';
+import { MessageResolvers, parseMessage } from '@/features/hermes/message';
+import { ReplyUnit, ReplyUnitOptions, splitReplyIntoUnits, takeCompleteUnits } from '@/features/hermes/reply-units';
 import { ReactionManager } from '@/features/hermes/reaction';
 import { Github } from '@/features/github';
 import { isGithubEnabledGroup } from '@/config/features';
@@ -27,7 +29,6 @@ import {
   GroupAdminApi,
   HermesApprovalEvent,
   MessageContentPart,
-  OneBotForwardNode,
   OneBotGetForwardMsgResponse,
   OneBotGetMsgResponse,
   OneBotGroupMemberInfo,
@@ -47,6 +48,12 @@ import {
  * - 群聊命令守卫：/ 或 ! 开头的消息不触发（除非显式 @bot），避免与 gugle-command 双重响应；
  * - 审批否定词（不允许/不批准）匹配顺序修正（上游先匹配「批准」导致否定词不可达）；
  * - 不实现 COMPACT_LINES 合并转发（上游默认关闭），长回复按长度切分发送；
+ * - QQ 群聊的 AI 回复改为「逐句发送」：流式增量里已完整的句子立即作为独立消息发出，
+ *   单条超过 compactMaxChars 字或 compactMaxLines 行时改用聊天记录（合并转发）发送；
+ *   引用只贴在本轮首条单元上；QQ 私聊与 Discord 维持原有整段切分行为；
+ * - 触发消息的引用/聊天记录按深度解析（depth ≤ 1 转发图片原图、depth 2 仅文字、
+ *   depth ≥ 3 记作 [聊天记录]），引用与聊天记录内的图片都会作为多模态输入转发给 AI
+ *   （解析逻辑见 message.ts；get_msg 只回 file 时兜底调 NapCat get_image 换直链）；
  * - 多人共享历史在提交时按当前对话者标注归属（[群聊背景] / [你回复 xxx 的话]），
  *   系统提示显式声明当前对话者与标注约定，避免串台认错人（context.ts）；
  * - 技能系统在群管理技能之外扩展卡片类公共技能（查Issue / B站视频），技能可产出
@@ -57,6 +64,8 @@ import {
  * - 触发 AI 时给触发消息贴「处理中」表情回应（QQ 贴表情 / Discord reaction，
  *   reaction.ts），完整回复完成（含回喂轮）后摘除；记录立即持久化到
  *   data/hermes-reactions.json，进程在回应期间退出时下次启动自动清理残留；
+ *   QQ 私聊消息 NapCat 通常不支持表情回应，贴失败时退化为一条文字回执
+ *   （privateReceiptText），AI 首条回复发出后撤回，让用户确认「AI 收到了」；
  * - AI 的群回复经 bot.sendGroupMsg 发出，会按既定行为同步转发到互通的 Discord 频道。
  *
  * Discord 频道触发（对上游的扩展）：
@@ -84,6 +93,9 @@ function mimeFromPath(filePath: string): string {
   const ext = filePath.split('.').pop()?.split(/[?#]/)[0]?.toLowerCase() || '';
   return IMAGE_MIME_BY_EXT[ext] || 'image/jpeg';
 }
+
+/** 保留标签：命中即不得经流式/工具边界下发，统一留给 finishRun 处理 */
+const RESERVED_LABEL_RE = /\[SKILL:|MEDIA:/;
 
 export class HermesBridge {
   private static instance?: HermesBridge;
@@ -377,6 +389,125 @@ export class HermesBridge {
   }
 
   // ===================================================================
+  //  QQ 群聊 AI 回复发送（逐句 + 超长转聊天记录）
+  // ===================================================================
+
+  /** 分句与合并转发阈值（每次发送时读取配置，热重载生效） */
+  private replyUnitOptions(): ReplyUnitOptions {
+    const config = getHermesConfig();
+    return {
+      maxUnitLength: config.maxMessageLength,
+      compactMaxChars: config.compactMaxChars,
+      compactMaxLines: config.compactMaxLines
+    };
+  }
+
+  /** 群聊 AI 文本是否走「逐句 + 聊天记录」新路径（私聊与 Discord 维持现状） */
+  private useReplyUnits(route: RouteInfo): boolean {
+    return route.type === 'group' && getHermesConfig().replyPerSentence;
+  }
+
+  /**
+   * 以聊天记录（合并转发）形式发送一段群聊文本。
+   * 单节点署名取 bot 昵称与 QQ 号；机器人信息缺失或发送失败时回退普通文本（不丢内容）。
+   */
+  private async sendGroupForward(route: RouteInfo, text: string): Promise<void> {
+    const bot = this.bot;
+    const login = bot?.getLoginInfoSync();
+    if (!bot || route.type !== 'group' || !login?.user_id) {
+      await this.sendReply(route, text);
+      return;
+    }
+    const messageId = await bot.sendGroupForwardMsg(route.groupId!, [
+      { name: getHermesConfig().botName, uin: login.user_id, content: text }
+    ]);
+    if (messageId === undefined) {
+      bot.logger?.warn(`[Hermes] 聊天记录发送失败，回退为普通文本（${text.length} 字）`);
+      await this.sendReply(route, text);
+    }
+  }
+
+  /**
+   * 发送一条群聊 AI 回复单元：超阈值走聊天记录，否则普通文本。
+   * 引用段仅贴在本轮首个单元上（阶梯式回复，避免每条都重复引用）。
+   */
+  private async sendReplyUnit(route: RouteInfo, unit: ReplyUnit, replyMsgId: number, run?: RunState): Promise<void> {
+    if (unit.asForward) {
+      await this.sendGroupForward(route, unit.text);
+      if (run) await this.recallReceiptOnce(run);
+      return;
+    }
+    if (!this.bot) return;
+    const attachReply = route.type === 'group' && replyMsgId > 0 && !(run?.replySent ?? false);
+    const segments: SentMessage = attachReply
+      ? [
+          { type: 'reply', data: { id: replyMsgId } },
+          { type: 'text', data: { text: unit.text } }
+        ]
+      : [{ type: 'text', data: { text: unit.text } }];
+    if (route.type === 'group') {
+      await this.bot.sendGroupMsg(route.groupId!, segments);
+    } else {
+      await this.bot.sendPrivateMsg(route.userId, segments);
+    }
+    // 无论发送成功与否都置位：避免失败时每条单元都重复贴引用
+    if (run && attachReply) run.replySent = true;
+    // 私聊回执：首条真实回复已发出，撤回「收到」提示
+    if (run) await this.recallReceiptOnce(run);
+  }
+
+  /**
+   * 首条真实回复发出后撤回私聊回执：用户已经看到 AI 的内容，回执不必常驻。
+   * 只执行一次（撤回后清空 run.receiptId）。
+   */
+  private async recallReceiptOnce(run: RunState): Promise<void> {
+    if (run.receiptId === undefined) return;
+    const receiptId = run.receiptId;
+    // exactOptionalPropertyTypes 下不能显式赋 undefined，用 delete 清除
+    delete run.receiptId;
+    await this.recallReceipt(run.route, receiptId);
+  }
+
+  /**
+   * QQ 群聊 AI 文本出口：按句拆成多条消息逐条发出；单条超过 compactMaxChars 字或
+   * compactMaxLines 行时改用聊天记录发送。非群聊路由或 replyPerSentence=false 时退回
+   * sendReply / sendReplyWithMention 的原有整段发送行为。
+   *
+   * 命中 `[SKILL:` / `MEDIA:` 的文本不下发（留给 finishRun 统一处理）。
+   */
+  private async sendAiReplyUnits(route: RouteInfo, text: string, replyMsgId: number, run?: RunState): Promise<void> {
+    if (!text.trim()) return;
+    if (!this.useReplyUnits(route)) {
+      await this.sendReplyWithMention(route, text, replyMsgId);
+      return;
+    }
+    if (RESERVED_LABEL_RE.test(text)) return;
+    const units = splitReplyIntoUnits(text, this.replyUnitOptions());
+    for (const unit of units) {
+      await this.sendReplyUnit(route, unit, replyMsgId, run);
+    }
+  }
+
+  /**
+   * 流式逐句下发：把 pendingText 里已完整的单元立即发出，未成形的部分写回 pendingText。
+   * 逐句单元不贴引用（由 finishRun 的收尾文本负责贴），保证「引用 + 首句」不会拆成两条。
+   */
+  private async flushStreamUnits(run: RunState): Promise<void> {
+    if (!this.useReplyUnits(run.route)) return;
+    if (!run.pendingText) return;
+    // 已出现保留标签：整段留给 finishRun（技能标签/图片路径绝不能原样发到群里）
+    if (RESERVED_LABEL_RE.test(run.pendingText)) return;
+    const { units, rest } = takeCompleteUnits(run.pendingText, this.replyUnitOptions());
+    run.pendingText = rest;
+    if (units.length === 0) return;
+    run.sentTextLength = run.messageDelta.length;
+    run.lastTextSent = Date.now();
+    for (const unit of units) {
+      await this.sendReplyUnit(run.route, unit, run.userMsgId, run);
+    }
+  }
+
+  // ===================================================================
   //  图片处理（Hermes 多模态输入 / MEDIA 标签输出）
   // ===================================================================
 
@@ -399,8 +530,9 @@ export class HermesBridge {
 
   /**
    * 解析图片段为 base64 data URL，全部转为 base64 后传给 Hermes。
-   * 优先下载 CDN url / http(s) file，否则读取本地文件。
-   * 失败时返回 null（仅保留 [图片] 占位符）。
+   * 优先下载 CDN url / http(s) file，其次读本地文件，最后兜底问一次 NapCat get_image
+   * （get_msg 返回的图片段常只有 file 没有 url，例如被引用消息里的图片）。
+   * 失败时返回 null（仅保留 [图片] 占位符），不抛错中断消息处理。
    */
   private async resolveImageDataUrl(segment: { data: { file: string; url?: string } }): Promise<string | null> {
     const { url, file } = segment.data || {};
@@ -420,42 +552,46 @@ export class HermesBridge {
         this.bot?.logger?.error(`[Hermes] 图片本地文件读取失败 ${file}: ${(error as Error).message}`);
       }
     }
-    return null;
+    return await this.resolveImageViaApi(file);
   }
 
-  /** 将消息段转为文本（用于引用/转发内容），图片段转为 [图片] 并收集图片 */
-  private async segmentsToText(segments: Message[] | string, images: string[]): Promise<string> {
-    if (typeof segments === 'string') return segments;
-    if (!Array.isArray(segments)) return '';
-    const config = getHermesConfig();
-    const parts: string[] = [];
-    for (const segment of segments) {
-      switch (segment.type) {
-        case 'text':
-          parts.push(segment.data.text);
-          break;
-        case 'at':
-          parts.push(String(segment.data.qq) === 'all' ? '@全体成员' : `@${segment.data.qq}`);
-          break;
-        case 'image': {
-          parts.push('[图片]');
-          if (config.forwardImages) {
-            const url = await this.resolveImageDataUrl(segment);
-            if (url) images.push(url);
-          }
-          break;
-        }
-        case 'video':
-          parts.push('[视频]');
-          break;
-        case 'record':
-          parts.push('[语音]');
-          break;
-        default:
-          break;
-      }
+  /**
+   * 兜底：请 NapCat 换取图片直链（get_image），再按直链下载为 data URL。
+   * 引用消息 / 聊天记录里的图片段常常只有 file 字段，这一步能把原图拿回来给 AI 识别。
+   */
+  private async resolveImageViaApi(file: string | undefined): Promise<string | null> {
+    if (!file) return null;
+    try {
+      const result = await this.callApi<{ url?: string; file?: string }>('get_image', { file });
+      const target = result?.url || result?.file;
+      if (!target) return null;
+      if (/^https?:\/\//i.test(target)) return await this.downloadImageToDataUrl(target);
+      const buffer = fs.readFileSync(target);
+      return `data:${mimeFromPath(target)};base64,${buffer.toString('base64')}`;
+    } catch (error) {
+      this.bot?.logger?.warn(`[Hermes] get_image 兜底失败 ${file}: ${(error as Error).message}`);
+      return null;
     }
-    return parts.join('').trim();
+  }
+
+  /**
+   * 组装消息解析用的 resolver（IO 由本类提供，深度/占位/去重逻辑在 message.ts 中）。
+   * 解析失败一律降级为 null / 抛错由 message.ts 转成占位符，不阻塞触发流程。
+   */
+  private messageResolvers(groupId: number | undefined): MessageResolvers {
+    return {
+      getMsg: messageId =>
+        this.callApi<OneBotGetMsgResponse>('get_msg', { message_id: messageId }).then(original => ({
+          sender: original?.sender,
+          time: original?.time,
+          message: original?.message
+        })),
+      getForward: forwardId => this.callApi<OneBotGetForwardMsgResponse>('get_forward_msg', { message_id: forwardId }),
+      resolveImage: segment => this.resolveImageDataUrl(segment),
+      resolveName: qq => (groupId === undefined ? Promise.resolve(null) : this.resolveMemberName(groupId, qq)),
+      formatTime: unixTs => this.formatTime(unixTs),
+      forwardImages: getHermesConfig().forwardImages
+    };
   }
 
   // ===================================================================
@@ -489,7 +625,8 @@ export class HermesBridge {
       const image = await renderProgressImage({
         tools: run.tools,
         currentTool: run.currentTool,
-        messageDelta: run.pendingText || run.messageDelta,
+        // 逐句下发后 pendingText 只剩未成形的尾巴，进度预览用完整增量更贴近实际输出
+        messageDelta: run.messageDelta,
         elapsed
       });
       if (image) {
@@ -529,119 +666,16 @@ export class HermesBridge {
   }
 
   /**
-   * 将 OneBot 消息转换为 AI 可理解的富文本格式：
-   * 文本 → 原文；@提及 → @昵称(QQ)；图片 → [图片] + 原图（forwardImages 可关）；
-   * 视频/语音 → 占位符；回复引用 → 引用块（含原消息图片）；合并转发 → 逐条引用块。
+   * 将 OneBot 消息转换为 AI 可理解的富文本格式（委托 message.ts 的深度解析）。
+   * 深度规则：引用/聊天记录逐层展开（depth+1），depth ≤ 1 的图片转发原图给 Hermes，
+   * depth 2 只解析文字，depth ≥ 3 一律记作 [聊天记录]；详见 message.ts 文件头深度表。
    */
   private async formatMessage(
     message: ReceiveMessage | string,
     groupId: number | undefined
   ): Promise<FormattedMessage> {
-    if (typeof message === 'string') return { text: message, images: [] };
-    if (!Array.isArray(message)) return { text: '', images: [] };
-    const config = getHermesConfig();
-
-    // 收集所有需要解析昵称的 @提及，并行查询群成员昵称
-    const atQqs: string[] = [];
-    for (const segment of message) {
-      if (segment.type === 'at' && segment.data.qq && String(segment.data.qq) !== 'all') {
-        const qq = String(segment.data.qq);
-        if (!atQqs.includes(qq)) atQqs.push(qq);
-      }
-    }
-    const nameMap = new Map<string, string>();
-    if (atQqs.length > 0 && groupId !== undefined) {
-      const results = await Promise.all(atQqs.map(qq => this.resolveMemberName(groupId, qq).catch(() => null)));
-      atQqs.forEach((qq, index) => {
-        const name = results[index];
-        if (name) nameMap.set(qq, name);
-      });
-    }
-
-    const parts: string[] = [];
-    const images: string[] = [];
-
-    for (const segment of message) {
-      switch (segment.type) {
-        case 'text':
-          parts.push(segment.data.text);
-          break;
-        case 'at': {
-          const qq = String(segment.data.qq);
-          if (qq === 'all') {
-            parts.push('@全体成员');
-          } else {
-            const name = nameMap.get(qq) || qq || '未知';
-            parts.push(`@${name}(${qq})`);
-          }
-          break;
-        }
-        case 'image': {
-          parts.push('[图片]');
-          if (config.forwardImages) {
-            const url = await this.resolveImageDataUrl(segment);
-            if (url) images.push(url);
-          }
-          break;
-        }
-        case 'video':
-          parts.push('[视频]');
-          break;
-        case 'record':
-          parts.push('[语音]');
-          break;
-        case 'reply': {
-          const repliedMsgId = segment.data.id;
-          if (repliedMsgId) {
-            try {
-              const original = await this.callApi<OneBotGetMsgResponse>('get_msg', {
-                message_id: Number(repliedMsgId)
-              });
-              if (original) {
-                const senderName = original.sender?.nickname || '未知';
-                const senderId = original.sender?.user_id || '';
-                const time = this.formatTime(original.time);
-                const content = await this.segmentsToText(original.message, images);
-                parts.push(`> ${senderName}(${senderId}) ${time}\n> ${content}\n`);
-              }
-            } catch {
-              parts.push('> [引用消息获取失败]\n');
-            }
-          }
-          break;
-        }
-        case 'forward': {
-          const forwardId = (segment as ForwardMessage).data.id;
-          if (forwardId) {
-            try {
-              const forward = await this.callApi<OneBotGetForwardMsgResponse>('get_forward_msg', {
-                message_id: forwardId
-              });
-              for (const node of forward.messages || []) {
-                // NapCat 节点格式: {type:"node", data:{...}}；go-cqhttp / OneBot v11 旧格式: {sender, time, content}
-                const merged = (node.type === 'node' ? node.data : node) as OneBotForwardNode['data'] & {
-                  sender?: { user_id?: number; nickname?: string; card?: string };
-                };
-                const nodeSegments = merged?.message?.length ? merged.message : merged?.content || [];
-                const nodeName =
-                  merged?.nickname || merged?.card || merged?.sender?.nickname || String(merged?.user_id ?? '未知');
-                const nodeId = String(merged?.user_id ?? merged?.sender?.user_id ?? '');
-                const nodeTime = merged?.time ? this.formatTime(merged.time) : '';
-                const content = await this.segmentsToText(nodeSegments, images);
-                parts.push(`> ${nodeName}(${nodeId}) ${nodeTime}\n> ${content}\n`);
-              }
-            } catch {
-              parts.push('> [转发消息获取失败]\n');
-            }
-          }
-          break;
-        }
-        default:
-          break;
-      }
-    }
-
-    return { text: parts.join('').trim(), images };
+    const parsed = await parseMessage(message, groupId, this.messageResolvers(groupId));
+    return { text: parsed.text, images: parsed.images };
   }
 
   // ===================================================================
@@ -708,8 +742,12 @@ export class HermesBridge {
       return;
     }
 
-    // 贴上「处理中」表情回应（立即持久化，进程崩溃时由下次启动清理残留）
+    // 贴上「处理中」表情回应（立即持久化，进程崩溃时由下次启动清理残留）。
+    // 私聊消息 NapCat 通常不支持表情回应：失败时退化为一条文字回执，
+    // 让用户知道 AI 已收到（reactionKey 为 null 表示没贴上）。
     const reactionKey = await this.reactions.addQQ(bot, msg.message_id);
+    const receiptId =
+      reactionKey === null && route.type === 'user' ? await this.sendPrivateReceipt(route) : undefined;
 
     await this.startHermesRun(
       bot,
@@ -719,8 +757,37 @@ export class HermesBridge {
       this.senderLabel(msg.sender, route.userId),
       msg.message_id,
       0,
-      reactionKey ?? undefined
+      reactionKey ?? undefined,
+      receiptId
     );
+  }
+
+  /**
+   * 私聊文字回执：贴表情失败时发一条简短提示，让用户知道 AI 已收到。
+   * 返回回执消息 id（供 AI 回复时撤回；撤回失败则留在聊天里，不影响对话）。
+   */
+  private async sendPrivateReceipt(route: RouteInfo): Promise<number | undefined> {
+    const config = getHermesConfig();
+    if (!config.privateReactionFallbackText || !config.privateReceiptText.trim()) return undefined;
+    if (!this.bot || route.type !== 'user') return undefined;
+    try {
+      return await this.bot.sendPrivateMsg(route.userId, [
+        { type: 'text', data: { text: config.privateReceiptText } }
+      ]);
+    } catch (error) {
+      this.bot.logger?.warn(`[Hermes] 私聊文字回执发送失败: ${(error as Error).message}`);
+      return undefined;
+    }
+  }
+
+  /** 撤回私聊文字回执（AI 开始回复时清掉，避免回执常驻聊天；失败只记日志） */
+  private async recallReceipt(route: RouteInfo, receiptId: number | undefined): Promise<void> {
+    if (receiptId === undefined || !this.bot) return;
+    try {
+      await this.bot.axiosInstance.post('/delete_msg', { message_id: receiptId });
+    } catch (error) {
+      this.bot.logger?.debug(`[Hermes] 撤回私聊回执失败（${receiptId}）: ${(error as Error).message}`);
+    }
   }
 
   // ===================================================================
@@ -898,7 +965,8 @@ export class HermesBridge {
     senderLabel: string,
     replyMsgId: number,
     feedbackDepth: number = 0,
-    reactionKey?: string
+    reactionKey?: string,
+    receiptId?: number
   ): Promise<void> {
     const config = getHermesConfig();
 
@@ -958,19 +1026,28 @@ export class HermesBridge {
         userMsgId: replyMsgId,
         senderLabel,
         feedbackDepth,
-        ...(reactionKey !== undefined ? { reactionKey } : {})
+        ...(reactionKey !== undefined ? { reactionKey } : {}),
+        ...(receiptId !== undefined ? { receiptId } : {})
       };
       this.activeRuns.set(runId, runState);
 
-      // 流式输出：工具调用前后自动 flush 中间文本
+      // 流式输出：工具调用前后强制下发中间文本；群聊另有逐句即时下发（见 message.delta）
       const flushPendingText = async () => {
-        const pending = runState.pendingText.trim();
-        if (!pending) return;
+        const pending = runState.pendingText;
+        if (!pending.trim()) return;
+        // 命中 [SKILL: / MEDIA: 的文本留在缓冲区，交给 finishRun 统一处理
+        if (RESERVED_LABEL_RE.test(pending)) return;
         runState.pendingText = '';
         runState.sentTextLength = runState.messageDelta.length;
         runState.lastTextSent = Date.now();
         try {
-          await this.sendReply(runState.route, pending);
+          if (this.useReplyUnits(runState.route)) {
+            for (const unit of splitReplyIntoUnits(pending, this.replyUnitOptions())) {
+              await this.sendReplyUnit(runState.route, unit, runState.userMsgId, runState);
+            }
+          } else {
+            await this.sendReply(runState.route, pending.trim());
+          }
         } catch (error) {
           this.bot?.logger?.error(`[Hermes] 文本发送错误: ${(error as Error).message}`);
         }
@@ -1001,6 +1078,13 @@ export class HermesBridge {
           runState.messageDelta += ev.delta || '';
           runState.pendingText += ev.delta || '';
 
+          // 群聊逐句即时下发：完整句子立刻发出，未成形的部分留在 pendingText
+          if (this.useReplyUnits(runState.route)) {
+            void this.flushStreamUnits(runState).catch(error =>
+              this.bot?.logger?.error(`[Hermes] 逐句发送错误: ${(error as Error).message}`)
+            );
+          }
+
           if (this.shouldSendProgress(runState) && runState.tools.length > 0) {
             this.sendProgressCard(runId).catch(error =>
               this.bot?.logger?.error(`[Hermes] 进度发送错误: ${(error as Error).message}`)
@@ -1018,6 +1102,7 @@ export class HermesBridge {
 
         'run.failed': ev => {
           runState.finalOutput = `❌ 执行失败: ${ev.error || '未知错误'}`;
+          runState.failed = true;
         },
 
         _end: () => {
@@ -1032,10 +1117,11 @@ export class HermesBridge {
       runState.stream = stream;
     } catch (error) {
       bot.logger?.error(`[Hermes] 提交错误: ${(error as Error).message}`);
-      // 提交即失败：摘除「处理中」表情回应
+      // 提交即失败：摘除「处理中」表情回应，并撤回私聊回执
       if (reactionKey) {
         await this.removeReaction(reactionKey, route).catch(() => {});
       }
+      await this.recallReceipt(route, receiptId);
       await this.sendReplyWithMention(route, `❌ 调用 Hermes 失败: ${(error as Error).message}`, replyMsgId);
     }
   }
@@ -1098,10 +1184,46 @@ export class HermesBridge {
 
   /** handleRunComplete 主体（拆出以便统一在 finally 中摘除表情回应；markKeepReaction 用于回喂转移） */
   private async finishRun(run: RunState, markKeepReaction: () => void): Promise<void> {
+    try {
+      await this.finishRunBody(run, markKeepReaction);
+    } finally {
+      // 收尾兜底：本轮若已把回执转移给查询技能的回喂轮（receiptTransferred），
+      // 由下一轮负责撤回；否则无论走哪条分支（含提前 return）都在此撤回，
+      // 避免「❌ 执行失败」这类走 sendReplyWithMention 的路径把回执留在聊天里。
+      if (run.receiptTransferred !== true) {
+        await this.recallReceiptOnce(run);
+      }
+    }
+  }
+
+  /** finishRun 主体（拆出以便统一在 finally 中撤回私聊回执） */
+  private async finishRunBody(run: RunState, markKeepReaction: () => void): Promise<void> {
     let output = run.finalOutput || run.messageDelta;
 
-    // 如果中间已经发过文本，通过与 messageDelta 比对找出未发送的剩余部分
-    if (run.sentTextLength > 0 && run.messageDelta && output) {
+    // 逐句下发过时，remainingText 由流式路径负责；这里只处理「尚未下发的尾段」。
+    // 说明：流式下发的单元已裁剪空白，无法与源串按下标对齐，因此改用缓冲区判断——
+    // pendingText 为空表示全部已发出，非空表示还有未成形的尾段（可能同时含 run.completed 的完整输出差异）。
+    if (this.useReplyUnits(run.route)) {
+      const pending = run.pendingText.trim();
+      run.pendingText = '';
+      // run.completed 的完整输出比流式增量更长（SSE 丢帧等）：补发差额，避免漏字。
+      // 仅在 messageDelta 确实是 finalOutput 前缀时补发，否则宁可漏发也不重复发。
+      const tailFromFinal =
+        run.finalOutput && run.messageDelta && run.finalOutput.startsWith(run.messageDelta)
+          ? run.finalOutput.slice(run.messageDelta.length).trim()
+          : '';
+      if (run.failed) {
+        // 运行失败：失败文案优先发出（已逐句下发的部分不重复发）
+        output = run.finalOutput || output;
+      } else if (pending) {
+        output = pending;
+      } else if (tailFromFinal) {
+        output = tailFromFinal;
+      } else if (run.sentTextLength > 0) {
+        return; // 全部已发送
+      }
+      // 否则保持 output = finalOutput || messageDelta（例如无流式增量、仅 run.completed 给全文）
+    } else if (run.sentTextLength > 0 && run.messageDelta && output) {
       const unsentFromDelta = run.messageDelta.slice(run.sentTextLength).trim();
       if (unsentFromDelta) {
         output = unsentFromDelta;
@@ -1141,14 +1263,16 @@ export class HermesBridge {
         if (depth < HermesBridge.MAX_FEEDBACK_DEPTH) {
           // 中间文本（如「我查一下」）照常发出，工具数据记入历史后提交回喂轮
           if (output) {
-            await this.sendReplyWithMention(run.route, output, run.userMsgId).catch(error => {
+            await this.sendAiReplyUnits(run.route, output, run.userMsgId, run).catch(error => {
               this.bot?.logger?.error(`[Hermes] 中间回复发送失败: ${(error as Error).message}`);
             });
           }
           this.appendHistory(this.getSessionKey(run.route), 'assistant', output, run.route.userId, run.senderLabel);
           const feedbackText = skillOutput.feedback.map(item => `[工具结果 ${item.skill}]\n${item.data}`).join('\n\n');
-          // 表情回应记录键随回喂转移给下一轮，链尾才摘除
+          // 表情回应记录键随回喂转移给下一轮，链尾才摘除；私聊回执同理转移
           markKeepReaction();
+          const transferredReceipt = run.receiptId;
+          if (transferredReceipt !== undefined) run.receiptTransferred = true;
           await this.startHermesRun(
             this.bot,
             run.route,
@@ -1157,7 +1281,8 @@ export class HermesBridge {
             run.senderLabel,
             run.userMsgId,
             depth + 1,
-            run.reactionKey
+            run.reactionKey,
+            transferredReceipt
           );
           return;
         }
@@ -1190,8 +1315,11 @@ export class HermesBridge {
     }
 
     if (remainingText) {
-      await this.sendReplyWithMention(run.route, remainingText, run.userMsgId);
+      // 群聊逐句发送（单条超阈值转聊天记录）；私聊与 Discord 走原有整段发送
+      await this.sendAiReplyUnits(run.route, remainingText, run.userMsgId, run);
     }
+    // 兜底：回复已发出但回执还没撤（例如走的是非 sendReplyUnit 路径），这里补一次
+    await this.recallReceiptOnce(run);
   }
 
   // ===================================================================

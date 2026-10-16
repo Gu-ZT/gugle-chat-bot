@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import dayjs from 'dayjs';
 import { LoggerFactory } from '@/logger';
 import { EventManager } from 'gugle-event';
-import { GroupMessageWSMSG, LoginInfo, LoginInfoData, Message, SentMessage, WSMSG } from '@/type';
+import { GroupMessageWSMSG, LoginInfo, LoginInfoData, Message, NodeMessage, SentMessage, WSMSG } from '@/type';
 import axios, { AxiosInstance } from 'axios';
 import { Github } from '@/features/github';
 import * as cron from 'node-cron';
@@ -28,6 +28,15 @@ export interface SendGroupMsgOptions {
    * （命令回复、AI 对话等交互式机器人消息不受此限）。
    */
   fromWebhook?: boolean;
+}
+
+/** bot.sendGroupForwardMsg 的合并转发节点 */
+export interface ForwardNode {
+  /** 节点署名（缺省用 bot 昵称/QQ 号由调用方决定） */
+  name?: string;
+  uin?: string | number;
+  /** 节点内容：纯文本或消息段数组 */
+  content: string | Message[];
 }
 
 /** bot.sendGroupMsg 成功后的通知负载（供互通桥把机器人自身消息转发到 Discord） */
@@ -479,6 +488,57 @@ export class QQBot {
           });
       });
     });
+  }
+
+  /**
+   * 以合并转发（聊天记录）形式发送群消息，用于超长 AI 回复等场景。
+   *
+   * 结构完全对齐 sendGroupMsg：同样走 operation 队列，失败只记录日志并回传 undefined（不 reject）；
+   * 成功后照常通知互通桥，DiscordBridge 因而仍能镜像这条消息（它会把 node 段文本拍平后转发）。
+   */
+  public sendGroupForwardMsg(
+    groupId: string | number,
+    nodes: ForwardNode[],
+    options?: SendGroupMsgOptions
+  ): Promise<number | undefined> {
+    return new Promise(resolve => {
+      this.operation(() => {
+        const message: NodeMessage[] = nodes.map(node => QQBot.toForwardNodeMessage(node));
+        this.axiosInstance
+          .post(`/send_group_forward_msg`, {
+            group_id: groupId,
+            message: message
+          })
+          .then(res => {
+            const messageId: number | undefined = res?.data?.data?.message_id;
+            this.notifyGroupMessageSent({
+              groupId: Number(groupId),
+              message,
+              messageId,
+              fromBridge: options?.fromBridge === true,
+              fromWebhook: options?.fromWebhook === true
+            });
+            resolve(messageId);
+          })
+          .catch(error => {
+            this.logger?.error(`Failed to send group forward message to ${groupId}: ${error.message}`);
+            resolve(undefined);
+          });
+      });
+    });
+  }
+
+  /** 把调用方的 ForwardNode 补成 OneBot 的 node 段（NapCat 口径：昵称与 QQ 号一律字符串化） */
+  private static toForwardNodeMessage(node: ForwardNode): NodeMessage {
+    // user_id 在类型里声明为 number，但 OneBot 实际接受/回传字符串（NapCat 口径即 String(uin)），这里按载荷需要断言
+    return {
+      type: 'node',
+      data: {
+        nickname: String(node.name ?? ''),
+        user_id: String(node.uin ?? '') as unknown as number,
+        content: typeof node.content === 'string' ? [{ type: 'text', data: { text: node.content } }] : node.content
+      }
+    };
   }
 
   /**

@@ -79,11 +79,15 @@ export class ReactionManager {
 
   /**
    * QQ：给消息贴「处理中」表情，成功后立即持久化记录并返回记录键。
-   * 贴表情失败 / 功能关闭时返回 null（表情回应是增强体验，失败不阻塞对话）。
+   * 返回 null 表示没贴上（功能关闭或 NapCat 拒绝，例如私聊消息通常不支持表情回应），
+   * 调用方据此决定是否改用文字回执；具体原因写入日志便于排查。
    */
   public async addQQ(bot: QQBot, messageId: number): Promise<string | null> {
     const config = getHermesConfig();
-    if (!config.reactionEnabled) return null;
+    if (!config.reactionEnabled) {
+      bot.logger?.debug(`[Hermes] 表情回应已关闭，跳过（message ${messageId}）`);
+      return null;
+    }
     try {
       await bot.axiosInstance.post('/set_msg_emoji_like', {
         message_id: messageId,
@@ -91,7 +95,10 @@ export class ReactionManager {
         set: true
       });
     } catch (error) {
-      bot.logger?.warn(`[Hermes] 表情回应失败（message ${messageId}）: ${(error as Error).message}`);
+      bot.logger?.warn(
+        `[Hermes] 表情回应失败（message ${messageId}）: ${(error as Error).message}` +
+          `；NapCat 对私聊消息通常不支持 set_msg_emoji_like`
+      );
       return null;
     }
     const key = `qq:${messageId}`;

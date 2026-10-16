@@ -131,6 +131,11 @@ async function main() {
   bridge.sendReplyWithMention = async (_route: unknown, text: string) => {
     sentTexts.push(text);
   };
+  // 群聊 AI 文本现在走逐句/聊天记录出口（sendAiReplyUnits）：本脚本只关心表情回应时机，
+  // 直接截获该出口；发送形态本身由 scripts/smoke-hermes-send-units.ts 覆盖
+  bridge.sendAiReplyUnits = async (_route: unknown, text: string) => {
+    sentTexts.push(text);
+  };
   bridge.sendReply = async () => {};
   bridge.appendHistory = () => {};
   const followups: Array<{ depth: number; reactionKey?: string }> = [];

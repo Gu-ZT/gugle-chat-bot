@@ -47,6 +47,43 @@ async function main() {
   check('progressRateLimitSec-negative', normalized?.progressRateLimitSec, 15);
   check('forwardImages', normalized?.forwardImages, false);
 
+  // 逐句发送 / 聊天记录阈值 / 私聊回执：默认值、坏类型回退、0 必须合法保留、空串合法
+  const defaults = hermesConfigFactory();
+  check('default-replyPerSentence', defaults.replyPerSentence, true);
+  check('default-compactMaxChars', defaults.compactMaxChars, 40);
+  check('default-compactMaxLines', defaults.compactMaxLines, 5);
+  check('default-privateReactionFallbackText', defaults.privateReactionFallbackText, true);
+  check('default-privateReceiptText', defaults.privateReceiptText, '🤔 收到，正在思考…');
+
+  const zeroed = normalizeHermesConfig({ compactMaxChars: 0, compactMaxLines: 0 });
+  check('compact-0-is-valid', [zeroed?.compactMaxChars, zeroed?.compactMaxLines], [0, 0]);
+
+  const badTypes = normalizeHermesConfig({
+    replyPerSentence: 'yes',
+    compactMaxChars: 'many',
+    compactMaxLines: -3,
+    privateReactionFallbackText: 1,
+    privateReceiptText: 42
+  });
+  check('replyPerSentence-bad-type', badTypes?.replyPerSentence, defaults.replyPerSentence);
+  check('compactMaxChars-bad-type', badTypes?.compactMaxChars, defaults.compactMaxChars);
+  check('compactMaxLines-negative', badTypes?.compactMaxLines, defaults.compactMaxLines);
+  check('receiptFallback-bad-type', badTypes?.privateReactionFallbackText, defaults.privateReactionFallbackText);
+  check('receiptText-bad-type', badTypes?.privateReceiptText, defaults.privateReceiptText);
+
+  const overrides = normalizeHermesConfig({
+    replyPerSentence: false,
+    compactMaxChars: 80,
+    compactMaxLines: 0,
+    privateReactionFallbackText: false,
+    privateReceiptText: '在想了'
+  });
+  check('replyPerSentence-override', overrides?.replyPerSentence, false);
+  check('compactMaxChars-override', overrides?.compactMaxChars, 80);
+  check('compactMaxLines-off', overrides?.compactMaxLines, 0);
+  check('receiptFallback-off', overrides?.privateReactionFallbackText, false);
+  check('receiptText-override', overrides?.privateReceiptText, '在想了');
+
   process.exit(failed === 0 ? 0 : 1);
 }
 

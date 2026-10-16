@@ -488,8 +488,16 @@ export class DiscordBridge {
     const downloads: { url: string; name: string }[] = [];
     const files: { attachment: Buffer; name: string }[] = [];
     let replyQQId: number | undefined;
+    // QQ 侧 AI 长回复现在以聊天记录（node 段）形式发出，若直接跳过会导致这类消息完全不镜像到 Discord。
+    // 因此这里把 node 内的文本拍平后追加到 textParts，再走下方既有门控正常转发。
+    // 已知限制：node 内的图片/语音/视频/文件等附件不镜像（仅抽取 text/at/face 文本）。
+    const nodeTexts: string[] = [];
     for (const segment of event.message) {
-      if (segment.type === 'node') continue;
+      if (segment.type === 'node') {
+        const nodeText = this.flattenForwardNodeText(segment.data.content);
+        if (nodeText) nodeTexts.push(nodeText);
+        continue;
+      }
       switch (segment.type) {
         case 'text':
           textParts.push(segment.data.text);
@@ -536,6 +544,12 @@ export class DiscordBridge {
       if (fetched) files.push(fetched);
     }
 
+    // 聊天记录按节点分段展示：节点文本之间补换行，避免前一段末尾与后一段开头粘连
+    if (nodeTexts.length > 0) {
+      if (textParts.length > 0) textParts.push('\n');
+      textParts.push(nodeTexts.join('\n'));
+    }
+
     const text = textParts.join('').trim();
     if (!text && files.length === 0) return;
 
@@ -563,6 +577,49 @@ export class DiscordBridge {
         );
       }
     }
+  }
+
+  /** 聊天记录（node 段）内文本的递归深度上限：防御异常数据结构导致的无限递归 */
+  private static readonly FORWARD_NODE_MAX_DEPTH = 4;
+
+  /**
+   * 抽取合并转发（聊天记录）节点内容里的文本。
+   *
+   * QQ 侧超长 AI 回复现在以聊天记录（node）形式发出，这里把节点内容递归拍平：
+   * text → 原文、at → `@QQ号`、face → `[表情]`，嵌套的 node 继续下钻；
+   * 达到深度上限、或遇到非数组/未知类型时安全跳过（不抛错）。
+   * 已知限制：节点内的图片/语音/视频/文件等附件不镜像（仅回传文本）。
+   *
+   * @param content 节点内容（Message[]、纯文本字符串，或结构异常的未知值）
+   * @param depth 当前递归深度，超过上限即停止下钻
+   */
+  private flattenForwardNodeText(content: unknown, depth: number = 0): string {
+    if (depth >= DiscordBridge.FORWARD_NODE_MAX_DEPTH) return '';
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    const parts: string[] = [];
+    for (const raw of content) {
+      if (!raw || typeof raw !== 'object') continue;
+      const segment = raw as { type?: unknown; data?: unknown };
+      const data = (segment.data ?? {}) as { text?: unknown; qq?: unknown; content?: unknown };
+      switch (segment.type) {
+        case 'text':
+          if (typeof data.text === 'string') parts.push(data.text);
+          break;
+        case 'at':
+          if (data.qq !== undefined && data.qq !== null) parts.push(`@${String(data.qq)}`);
+          break;
+        case 'face':
+          parts.push('[表情]');
+          break;
+        case 'node':
+          parts.push(this.flattenForwardNodeText(data.content, depth + 1));
+          break;
+        default:
+          break;
+      }
+    }
+    return parts.join('');
   }
 
   /**

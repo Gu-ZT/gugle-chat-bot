@@ -100,6 +100,14 @@ export interface RunState {
   feedbackDepth?: number;
   /** 「处理中」表情回应的持久化记录键（回喂轮转移给下一轮，对话链完全结束时摘除） */
   reactionKey?: string;
+  /** 本轮是否已经贴过引用（逐句发送时只有首条单元贴引用，避免每条都重复引用） */
+  replySent?: boolean;
+  /** 本轮是否以 run.failed 结束（失败文案必须发出，不因已逐句下发而跳过） */
+  failed?: boolean;
+  /** 私聊文字回执的消息 id（AI 开始回复时撤回；QQ 表情回应失败时的降级方案） */
+  receiptId?: number;
+  /** 回执是否已转移给查询技能的回喂轮（转移后由下一轮负责撤回） */
+  receiptTransferred?: boolean;
   stream?: { abort(): void };
 }
 

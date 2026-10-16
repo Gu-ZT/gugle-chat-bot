@@ -14,11 +14,20 @@ import { isOperator } from '@/config/features';
  *   "groups": [659356928],
  *   "admins": [],
  *   "requireMention": true,
- *   "keywordTriggers": ["小喵"]
+ *   "keywordTriggers": ["小喵"],
+ *   "replyPerSentence": true,
+ *   "compactMaxChars": 40,
+ *   "compactMaxLines": 5,
+ *   "privateReactionFallbackText": true,
+ *   "privateReceiptText": "🤔 收到，正在思考…"
  * }
  * ```
  * - `groups`：启用 AI 对话的 QQ 群（空=群聊不启用）；互通的 Discord 频道能否触发 AI
  *   也由其桥接的 QQ 群是否在此列表决定；私聊始终启用（受用户黑白名单约束）；
+ * - `replyPerSentence`：QQ 群聊 AI 回复逐句发送；单条超过 compactMaxChars 字或
+ *   compactMaxLines 行时改用聊天记录（合并转发）发送，任一项填 0 关闭该维度；
+ * - `privateReactionFallbackText`：私聊贴表情失败时改发文字回执（NapCat 对私聊
+ *   消息通常不支持 set_msg_emoji_like），AI 首条回复发出后自动撤回；
  * - Bot QQ 号无需配置，取 bot.getLoginInfoSync().user_id（@提及判定）；
  * - 系统提示词优先级：configs/SOUL.md > systemPrompt > 空。
  */
@@ -53,6 +62,12 @@ export interface HermesBridgeConfig {
   maxMessageLength: number;
   /** 是否将消息中的图片原图转发给 Hermes（多模态识别） */
   forwardImages: boolean;
+  /** 是否按句拆分 AI 回复逐条发送（关闭则整段一次发出） */
+  replyPerSentence: boolean;
+  /** 单条回复超过该字数改用聊天记录（合并转发）发送；0=关闭该维度 */
+  compactMaxChars: number;
+  /** 单条回复超过该行数改用聊天记录（合并转发）发送；0=关闭该维度 */
+  compactMaxLines: number;
   /** 系统提示词（被 configs/SOUL.md 覆盖） */
   systemPrompt: string;
   /** 保留的历史消息轮数 */
@@ -71,6 +86,14 @@ export interface HermesBridgeConfig {
   reactionEmojiQq: string;
   /** Discord 表情回应（unicode emoji） */
   reactionEmojiDiscord: string;
+  /**
+   * 私聊贴表情失败时改用文字回执（默认 true）。
+   * NapCat 对私聊消息通常不支持 set_msg_emoji_like，贴表情会失败；
+   * 开启后改发一条简短提示，让用户知道 AI 已收到（群聊不受影响）。
+   */
+  privateReactionFallbackText: boolean;
+  /** 私聊文字回执内容（privateReactionFallbackText 开启且贴表情失败时发送） */
+  privateReceiptText: string;
 }
 
 export function hermesConfigFactory(): HermesBridgeConfig {
@@ -90,6 +113,9 @@ export function hermesConfigFactory(): HermesBridgeConfig {
     progressMaxTools: 12,
     maxMessageLength: 1200,
     forwardImages: true,
+    replyPerSentence: true,
+    compactMaxChars: 40,
+    compactMaxLines: 5,
     systemPrompt: '',
     localHistoryMaxMessages: 24,
     persistHistoryEnabled: true,
@@ -98,7 +124,9 @@ export function hermesConfigFactory(): HermesBridgeConfig {
     approvalTimeoutSec: 300,
     reactionEnabled: true,
     reactionEmojiQq: '76',
-    reactionEmojiDiscord: '👀'
+    reactionEmojiDiscord: '👀',
+    privateReactionFallbackText: true,
+    privateReceiptText: '🤔 收到，正在思考…'
   };
 }
 
@@ -144,6 +172,9 @@ export function normalizeHermesConfig(raw: unknown): HermesBridgeConfig | null {
     progressMaxTools: asPositiveNumber(record.progressMaxTools, fallback.progressMaxTools),
     maxMessageLength: asPositiveNumber(record.maxMessageLength, fallback.maxMessageLength),
     forwardImages: asBool(record.forwardImages, fallback.forwardImages),
+    replyPerSentence: asBool(record.replyPerSentence, fallback.replyPerSentence),
+    compactMaxChars: asPositiveNumber(record.compactMaxChars, fallback.compactMaxChars),
+    compactMaxLines: asPositiveNumber(record.compactMaxLines, fallback.compactMaxLines),
     systemPrompt: asString(record.systemPrompt, fallback.systemPrompt),
     localHistoryMaxMessages: asPositiveNumber(record.localHistoryMaxMessages, fallback.localHistoryMaxMessages),
     persistHistoryEnabled: asBool(record.persistHistoryEnabled, fallback.persistHistoryEnabled),
@@ -152,7 +183,9 @@ export function normalizeHermesConfig(raw: unknown): HermesBridgeConfig | null {
     approvalTimeoutSec: asPositiveNumber(record.approvalTimeoutSec, fallback.approvalTimeoutSec),
     reactionEnabled: asBool(record.reactionEnabled, fallback.reactionEnabled),
     reactionEmojiQq: asString(record.reactionEmojiQq, fallback.reactionEmojiQq),
-    reactionEmojiDiscord: asString(record.reactionEmojiDiscord, fallback.reactionEmojiDiscord)
+    reactionEmojiDiscord: asString(record.reactionEmojiDiscord, fallback.reactionEmojiDiscord),
+    privateReactionFallbackText: asBool(record.privateReactionFallbackText, fallback.privateReactionFallbackText),
+    privateReceiptText: asString(record.privateReceiptText, fallback.privateReceiptText)
   };
 }
 
