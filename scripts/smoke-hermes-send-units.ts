@@ -25,6 +25,7 @@ async function main() {
       apiUrl: 'http://127.0.0.1:9',
       groups: [1],
       replyPerSentence: true,
+      // 显式固定阈值，使发送链路断言不受默认值调整影响
       compactMaxChars: 40,
       compactMaxLines: 5,
       botName: '小喵'

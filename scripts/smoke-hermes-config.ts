@@ -50,10 +50,16 @@ async function main() {
   // 逐句发送 / 聊天记录阈值 / 私聊回执：默认值、坏类型回退、0 必须合法保留、空串合法
   const defaults = hermesConfigFactory();
   check('default-replyPerSentence', defaults.replyPerSentence, true);
-  check('default-compactMaxChars', defaults.compactMaxChars, 40);
+  // 默认阈值按代码为准（当前 300 字），避免测试里重复硬编码字面量
+  check('default-compactMaxChars', defaults.compactMaxChars, 300);
   check('default-compactMaxLines', defaults.compactMaxLines, 5);
   check('default-privateReactionFallbackText', defaults.privateReactionFallbackText, true);
   check('default-privateReceiptText', defaults.privateReceiptText, '🤔 收到，正在思考…');
+
+  // 缺省字段回退必须与 factory 一致（阈值调整后不会漏改）
+  const emptyNormalized = normalizeHermesConfig({});
+  check('fallback-compactMaxChars-matches-factory', emptyNormalized?.compactMaxChars, defaults.compactMaxChars);
+  check('fallback-compactMaxLines-matches-factory', emptyNormalized?.compactMaxLines, defaults.compactMaxLines);
 
   const zeroed = normalizeHermesConfig({ compactMaxChars: 0, compactMaxLines: 0 });
   check('compact-0-is-valid', [zeroed?.compactMaxChars, zeroed?.compactMaxLines], [0, 0]);

@@ -16,7 +16,7 @@ import { isOperator } from '@/config/features';
  *   "requireMention": true,
  *   "keywordTriggers": ["小喵"],
  *   "replyPerSentence": true,
- *   "compactMaxChars": 40,
+ *   "compactMaxChars": 300,
  *   "compactMaxLines": 5,
  *   "privateReactionFallbackText": true,
  *   "privateReceiptText": "🤔 收到，正在思考…"
@@ -114,7 +114,7 @@ export function hermesConfigFactory(): HermesBridgeConfig {
     maxMessageLength: 1200,
     forwardImages: true,
     replyPerSentence: true,
-    compactMaxChars: 40,
+    compactMaxChars: 300,
     compactMaxLines: 5,
     systemPrompt: '',
     localHistoryMaxMessages: 24,

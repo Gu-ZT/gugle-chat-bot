@@ -13,7 +13,15 @@ async function main() {
   fs.mkdirSync(path.join(tmp, 'configs', 'features'), { recursive: true });
   fs.writeFileSync(
     path.join(tmp, 'configs', 'features', 'hermes.json'),
-    JSON.stringify({ version: 1, apiUrl: 'http://127.0.0.1:9', groups: [1], replyPerSentence: true })
+    // 本脚本只关心顺序：显式固定阈值，避免默认值调整或长句被折进聊天记录干扰断言
+    JSON.stringify({
+      version: 1,
+      apiUrl: 'http://127.0.0.1:9',
+      groups: [1],
+      replyPerSentence: true,
+      compactMaxChars: 0,
+      compactMaxLines: 0
+    })
   );
   fs.writeFileSync(
     path.join(tmp, 'configs', 'features', 'management.json'),
