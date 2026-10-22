@@ -25,6 +25,10 @@ import { configStoreCount, reloadAllConfigStores } from '@/config/manager';
  * 1. buildRestartCommand() 重建命令时必须带上 execArgv；
  * 2. restartApplication() 在退出父进程前做健康检查，子进程秒退则回滚（父进程继续运行）；
  * 3. 子进程通过 QQBOT_START_DELAY_MS 延迟启动，避免与旧进程的 QQ 连接重叠互踢。
+ *
+ * 环境变量逃生口：若部署由外部托管（容器 restart policy / pm2 / systemd / shell 脚本），
+ * 可用 QQBOT_RESTART_COMMAND 指定重启命令（shell 执行），例如 `pm2 restart gugle-qq-bot`；
+ * 未设置时按 buildRestartCommand() 重建 argv（默认路径，已带 tsx 加载器）。
  */
 
 /** 重启/关停前的缓冲时间：给发送队列留出发送 + 日志刷盘的时间 */
@@ -32,6 +36,26 @@ const SHUTDOWN_GRACE_MS = 800;
 
 /** 重启时用于标记「本进程由 /reboot 拉起」，避免新进程继承同名环境变量造成误判 */
 const RESTART_ENV_FLAG = 'QQBOT_RESTARTED_BY_COMMAND';
+
+/**
+ * 自定义重启命令的环境变量名（逃生口）。
+ *
+ * 用法：某些部署由外部托管（容器 restart policy、pm2、systemd、一段 shell 脚本），
+ * 直接重建 argv 可能与宿主拉起方式不一致。设置该变量后改为用 shell 执行此命令串，例如：
+ * ```
+ * QQBOT_RESTART_COMMAND="pm2 restart gugle-qq-bot"
+ * QQBOT_RESTART_COMMAND="docker restart qq_bot"
+ * ```
+ * 未设置时走 buildRestartCommand() 重建 argv（默认路径）。
+ */
+const RESTART_COMMAND_ENV = 'QQBOT_RESTART_COMMAND';
+
+/** 是否用了自定义重启命令（供日志/回执说明） */
+export function customRestartCommand(): string | undefined {
+  const raw = process.env[RESTART_COMMAND_ENV];
+  const trimmed = raw?.trim();
+  return trimmed ? trimmed : undefined;
+}
 
 /** 子进程延迟启动时间的环境变量名（避免新旧进程 QQ 连接重叠） */
 const START_DELAY_ENV = 'QQBOT_START_DELAY_MS';
@@ -241,7 +265,7 @@ export async function restartApplication(options: RestartOptions = {}): Promise<
   restartInProgress = true;
 
   const {
-    restartCommand,
+    restartCommand: explicitRestartCommand,
     healthCheckMs = DEFAULT_HEALTH_CHECK_MS,
     exitDelayMs = DEFAULT_EXIT_DELAY_MS,
     startDelayMs = DEFAULT_START_DELAY_MS,
@@ -250,6 +274,11 @@ export async function restartApplication(options: RestartOptions = {}): Promise<
     logDir = path.resolve(process.cwd(), 'logs'),
     cwd = process.cwd()
   } = options;
+
+  // 优先级：显式传入 > QQBOT_RESTART_COMMAND 环境变量 > 按 execArgv 重建
+  const shellCommand = customRestartCommand();
+  const restartCommand: RestartCommand | { shell: string } | undefined =
+    explicitRestartCommand ?? (shellCommand !== undefined ? { shell: shellCommand } : undefined);
 
   // 子进程日志：detached + inherit 时父进程退出会关闭管道，子进程后续写入可能 EPIPE，
   // 因此改为写入独立日志文件，同时保证启动失败的原因可查。

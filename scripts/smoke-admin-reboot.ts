@@ -180,7 +180,39 @@ async function main() {
   check('concurrent-restart-failed-as-designed', concurrentResult.alive, false);
   check('restart-flag-released', admin.isRestartInProgress(), false);
 
-  // ── 6. restartStartDelayMs：仅被 /reboot 拉起时返回注入值 ──
+  // ── 6. QQBOT_RESTART_COMMAND 逃生口：设置后改走 shell 命令 ──
+  delete process.env.QQBOT_RESTART_COMMAND;
+  check('custom-restart-command-absent', admin.customRestartCommand(), undefined);
+  // 用可注入 spawn 验证走 shell 分支（不真执行外部命令）
+  let shellSpawnArgs: { command: unknown; options: Record<string, unknown> } | undefined;
+  process.env.QQBOT_RESTART_COMMAND = 'pm2 restart gugle-qq-bot';
+  check('custom-restart-command-read', admin.customRestartCommand(), 'pm2 restart gugle-qq-bot');
+  const shellResult = await admin.restartApplication({
+    healthCheckMs: 50,
+    exitDelayMs: 0,
+    logDir: path.join(tmp, 'logs-shell'),
+    exit: () => {},
+    // spawn 桩：返回一个「存活」的子进程，记录被调用的命令
+    spawnImpl: ((command: unknown, opts: Record<string, unknown>) => {
+      shellSpawnArgs = { command, options: opts };
+      const listeners = new Map<string, () => void>();
+      return {
+        pid: 4242,
+        once: (event: string, cb: () => void) => {
+          listeners.set(event, cb);
+          return undefined;
+        },
+        removeListener: () => undefined,
+        unref: () => undefined
+      };
+    }) as never
+  });
+  delete process.env.QQBOT_RESTART_COMMAND;
+  check('custom-restart-command-spawned', shellResult.alive, true);
+  check('custom-restart-command-value', shellSpawnArgs?.command, 'pm2 restart gugle-qq-bot');
+  check('custom-restart-command-uses-shell', shellSpawnArgs?.options.shell, true);
+
+  // ── 7. restartStartDelayMs：仅被 /reboot 拉起时返回注入值 ──
   delete process.env.QQBOT_RESTARTED_BY_COMMAND;
   delete process.env.QQBOT_START_DELAY_MS;
   check('start-delay-normal-launch', admin.restartStartDelayMs(), 0);
