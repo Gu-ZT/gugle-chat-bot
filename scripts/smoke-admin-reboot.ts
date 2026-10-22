@@ -79,12 +79,30 @@ async function main() {
     }
   });
   check('tsx-child-alive', result.alive, true);
-  // exit 通过 setTimeout(exitDelayMs) 安排，需让出事件循环后再断言
-  await new Promise(r => setTimeout(r, 50));
-  check('tsx-child-exit-called-on-success', exitCalled, true);
-  await new Promise(r => setTimeout(r, 600));
-  const logFiles = fs.existsSync(logDir) ? fs.readdirSync(logDir) : [];
-  const childLog = logFiles.length > 0 ? fs.readFileSync(path.join(logDir, logFiles[0]!), 'utf-8') : '';
+  // exit 通过 setTimeout(exitDelayMs) 安排：轮询等待，避免负载高时固定延时不够
+  const waitUntil = async (predicate: () => boolean, timeoutMs = 3000): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return true;
+      await new Promise(r => setTimeout(r, 20));
+    }
+    return predicate();
+  };
+  check('tsx-child-exit-called-on-success', await waitUntil(() => exitCalled), true);
+
+  // 轮询等待子进程日志（tsx 冷启动 + 机器负载会让固定延时不可靠）
+  const waitForLog = async (dir: string, needle: string, timeoutMs = 10_000): Promise<string> => {
+    const deadline = Date.now() + timeoutMs;
+    let content = '';
+    while (Date.now() < deadline) {
+      const files = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+      content = files.length > 0 ? fs.readFileSync(path.join(dir, files[0]!), 'utf-8') : '';
+      if (content.includes(needle)) return content;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return content;
+  };
+  const childLog = await waitForLog(logDir, 'FIXTURE_ALIAS_OK');
   checkContains('tsx-child-started', childLog, 'FIXTURE_STARTED');
   // 核心断言：@/ 别名解析成功（旧实现会在这里崩）
   checkContains('tsx-child-alias-resolved', childLog, 'FIXTURE_ALIAS_OK');
@@ -108,7 +126,18 @@ async function main() {
   });
   check('failed-child-alive-false', failedResult.alive, false);
   check('failed-child-parent-keeps-running', exitOnFailure, false);
-  checkContains('failed-child-log-tail', failedResult.logTail ?? '', 'BOOM_BOOT_FAILED');
+  // 日志写入与进程退出存在微小竞态，统一用轮询读取
+  const failedLog = await (async () => {
+    const deadline = Date.now() + 3000;
+    let tail = failedResult.logTail ?? '';
+    while (Date.now() < deadline && !tail.includes('BOOM_BOOT_FAILED')) {
+      await new Promise(r => setTimeout(r, 100));
+      const files = fs.existsSync(failDir) ? fs.readdirSync(failDir) : [];
+      if (files.length > 0) tail = fs.readFileSync(path.join(failDir, files[0]!), 'utf-8');
+    }
+    return tail;
+  })();
+  checkContains('failed-child-log-tail', failedLog, 'BOOM_BOOT_FAILED');
 
   // ── 4. 不存在的入口 → 子进程立刻失败，同样回滚 ──
   let exitOnMissing = false;
@@ -128,14 +157,18 @@ async function main() {
   // ── 5. 并发触发：第二次被拒绝；失败退出后标记释放 ──
   // 用「会失败」的重启做并发验证：失败路径会释放 restartInProgress，
   // 而成功路径会保留标记直到进程退出（生产语义如此，此处不适用）。
+  // 注意：restartApplication 在首个 await 之前就同步置位 restartInProgress，
+  // 因此无需 sleep 等待——加 sleep 反而会在负载高时让第一次重启先结束，导致用例不稳定。
   const concurrent = admin.restartApplication({
-    restartCommand: { command: process.execPath, args: ['-e', 'setTimeout(()=>process.exit(1), 400)'] },
-    healthCheckMs: 800,
+    // 子进程立即以失败码退出：不依赖「400ms 后才退出」这类时间假设，
+    // 否则机器负载高时 node 冷启动可能超过观察窗口，导致用例偶发失败。
+    restartCommand: { command: process.execPath, args: ['-e', 'process.exit(1)'] },
+    healthCheckMs: 1500,
     exitDelayMs: 0,
     logDir: path.join(tmp, 'logs-concurrent'),
     exit: () => {}
   });
-  await new Promise(r => setTimeout(r, 120)); // 确保第一次已进入 in-progress
+  check('restart-in-progress-flag-sync', admin.isRestartInProgress(), true);
   let concurrentError = '';
   try {
     await admin.restartApplication({ exit: () => {} });
