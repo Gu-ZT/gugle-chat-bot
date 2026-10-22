@@ -43,6 +43,21 @@ export function isBotCommandSource(source: CommandSource | undefined): source is
 }
 
 /**
+ * 由命令源推导「操作者标识」，供需要区分平台的管理逻辑使用。
+ *
+ * 背景：`executeCommand` 会把命令源包进 `FailOnceCommandSource` 代理，
+ * 命令实现里 `source instanceof GroupMsgCommandSource` 恒为 false——曾因此让
+ * QQ 管理员执行 /pardon 被误判成 Discord 用户而失败。这里改为按 BotCommandSource
+ * 的 id 约定判定，不依赖实例类型：
+ * - 纯数字 → QQ 号，返回 number（Management 内部再校验 operators 白名单）；
+ * - `dc:<用户ID>` → Discord 用户，原样返回字符串（服务器管理员身份已在命令源层校验）。
+ */
+export function resolveOperatorId(source: BotCommandSource): number | string {
+  const userId = source.getUserId();
+  return /^\d+$/.test(userId) ? Number(userId) : userId;
+}
+
+/**
  * 把命令文本规范化为 gugle-command 可执行的形式。
  *
  * gugle-command 固定使用 `/` 前缀；Discord 客户端会把以 `/` 开头的内容当作斜杠命令输入，

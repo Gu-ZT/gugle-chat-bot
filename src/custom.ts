@@ -1,4 +1,4 @@
-import { bot, GroupMsgCommandSource, QQBot } from '@/index';
+import { bot, QQBot } from '@/index';
 import {
   GroupDecreaseNoticeWSMSG,
   GroupIncreaseNoticeWSMSG,
@@ -13,7 +13,7 @@ import { Github } from '@/features/github';
 import { GitHubBindingManager } from '@/features/github/binding';
 import { Poke } from '@/features/poke';
 import { Arguments, CommandManager, CommandSource } from 'gugle-command';
-import { isBotCommandSource } from '@/command';
+import { isBotCommandSource, resolveOperatorId } from '@/command';
 import { MinecraftAPI } from '@/features/minecraft';
 import { ModrinthAPI } from '@/features/modrinth';
 import {
@@ -205,9 +205,10 @@ ${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings 
       source.fail(`QQ 号格式错误：${userId}`);
       return;
     }
-    // QQ 侧传 QQ 号（Management 内部再校验 operators 白名单）；
-    // Discord 侧传 dc:<用户ID>（服务器管理员身份已由命令源层校验）
-    const operatorId = source instanceof GroupMsgCommandSource ? source.msg.sender.user_id : source.getUserId();
+    // 命令源经 FailOnceCommandSource 代理后不再是 GroupMsgCommandSource 实例，
+    // 因此不能用 instanceof 区分平台（否则 QQ 管理员会被当成 Discord 用户判失败）。
+    // 改为按 BotCommandSource 的 id 约定推导（纯数字=QQ 号，dc: 前缀=Discord 用户）。
+    const operatorId = resolveOperatorId(source);
     Management.pardon(groupId, operatorId, qq)
       .then(removed => {
         if (removed) {
