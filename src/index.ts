@@ -14,6 +14,7 @@ import * as cron from 'node-cron';
 import { BotEvent, BotEventCancelable, EventCallback } from '@/type/event';
 import { CommandManager, CommandSource } from 'gugle-command';
 import { BotCommandSource, executeCommand } from '@/command';
+import { restartStartDelayMs } from '@/features/admin';
 
 /** bot.sendGroupMsg 的附加选项 */
 export interface SendGroupMsgOptions {
@@ -669,7 +670,26 @@ process.on('uncaughtException', error => {
 
 require('@/custom');
 
-bot.start().then(bot => {
-  const github = new Github(bot);
+/**
+ * 启动机器人（含 /reboot 拉起时的延迟启动）。
+ *
+ * /reboot 会先拉起新进程再退出旧进程；若新进程立刻连接 NapCat，会与旧进程的
+ * 同号连接冲突（互踢 / 消息丢失）。因此被 /reboot 拉起时按 QQBOT_START_DELAY_MS
+ * 延迟启动，给旧进程留出断开时间。正常启动该延迟为 0，行为不变。
+ */
+async function startBot(): Promise<void> {
+  const restartDelay = restartStartDelayMs();
+  if (restartDelay > 0) {
+    (bot.logger ?? console).info(
+      `[Admin] 本进程由 /reboot 拉起，延迟 ${restartDelay}ms 启动以避免与旧连接重叠`
+    );
+    await new Promise(resolve => setTimeout(resolve, restartDelay));
+  }
+  const started = await bot.start();
+  const github = new Github(started);
   github.start(botConfig.githubPort);
+}
+
+startBot().catch(error => {
+  (bot.logger ?? console).error(`启动失败: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
 });

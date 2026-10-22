@@ -29,7 +29,14 @@ import { Bili } from '@/features/bili';
 import { Management } from '@/features/management';
 import { Welcome } from '@/features/welcome';
 import { PeakValleyTimer } from '@/features/peak-valley-timer';
-import { isRestartedByCommand, reloadRuntime, shutdownApplication, spawnReplacementProcess } from '@/features/admin';
+import {
+  isRestartedByCommand,
+  isRestartInProgress,
+  reloadRuntime,
+  restartApplication,
+  restartStartDelayMs,
+  shutdownApplication
+} from '@/features/admin';
 import { DiscordBridge } from '@/features/discord-bridge';
 import { HermesBridge } from '@/features/hermes';
 
@@ -205,22 +212,36 @@ ${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings 
       });
   }
 
-  /** /reboot：重启应用（拉起新进程后退出当前进程） */
-  public static rebootCommand(source: CommandSource) {
+  /**
+   * /reboot：重启应用（拉起新进程 → 健康检查通过后才退出当前进程）。
+   *
+   * 关键：健康检查失败时**不退出**当前进程（机器人保持在线），并向触发者回报失败原因。
+   * 早期实现 spawn 后无条件 exit，一旦新进程启动失败（如丢失 tsx 加载器导致别名解析失败）
+   * 就会让机器人直接离线。
+   */
+  public static async rebootCommand(source: CommandSource) {
     if (!CustomBot.requireAdmin(source)) return;
+    if (isRestartInProgress()) {
+      source.fail('已有重启正在进行中，请稍候');
+      return;
+    }
     source.success('🔄 正在重启应用，请稍候…');
-    // 先让确认消息发出去，再拉起新进程并退出（spawnReplacementProcess 内部含退出缓冲）
-    setTimeout(() => {
-      try {
-        const pid = spawnReplacementProcess();
-        bot.logger?.info(`[Admin] /reboot 由 ${source.getName()} 触发，新进程 pid=${pid}，当前进程即将退出`);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        bot.logger?.error(`[Admin] /reboot 失败: ${message}`);
-        // spawn 失败：取消重启、保持当前进程运行，并告知触发者
-        source.fail(`重启失败（当前进程继续运行）：${message}`);
+    // 先让确认消息发出去，再执行重启（restartApplication 内部含健康检查与退出缓冲）
+    await new Promise(resolve => setTimeout(resolve, CustomBot.REBOOT_CONFIRM_DELAY_MS));
+    try {
+      const result = await restartApplication();
+      if (!result.alive) {
+        const detail = result.logTail ? `\n${result.logTail.split('\n').slice(-6).join('\n')}` : '';
+        bot.logger?.error(`[Admin] /reboot 失败：新进程 ${result.pid} 已退出，当前进程继续运行${detail}`);
+        source.fail(`重启失败（当前进程继续运行）：新进程启动后立即退出${detail}`);
+        return;
       }
-    }, CustomBot.REBOOT_CONFIRM_DELAY_MS);
+      bot.logger?.info(`[Admin] /reboot 由 ${source.getName()} 触发，新进程 pid=${result.pid}，当前进程即将退出`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      bot.logger?.error(`[Admin] /reboot 失败: ${message}`);
+      source.fail(`重启失败（当前进程继续运行）：${message}`);
+    }
   }
 
   /** /shutdown：关闭应用 */

@@ -74,40 +74,32 @@ async function main() {
   });
   check('reload-partial-failure-continues', [partial.eventData, partial.githubBindings, partial.extras], [false, true, ['正常']]);
 
-  // ── 5. /reboot：spawn 新进程（用 node -e 起一个短命进程验证 argv 透传与 pid） ──
+  // ── 5. /reboot：spawn 新进程 + 健康检查（详细用例见 smoke-admin-reboot.ts） ──
   const markerFile = path.join(tmp, 'spawned-marker.txt');
-  const childScript = `require('node:fs').writeFileSync(${JSON.stringify(markerFile)}, 'spawned');`;
-  // onSpawned 注入为空实现：验证 spawn 逻辑但不让测试进程自己退出
+  // 子进程写入标记后保持存活，才能通过健康检查（立即退出的会被判为启动失败）
+  const childScript = `require('node:fs').writeFileSync(${JSON.stringify(markerFile)}, 'spawned'); setTimeout(()=>{},1500);`;
   let exitScheduled = false;
-  const pid = admin.spawnReplacementProcess([process.execPath, '-e', childScript], 0, () => {
-    exitScheduled = true;
+  const restartResult = await admin.restartApplication({
+    restartCommand: { command: process.execPath, args: ['-e', childScript] },
+    healthCheckMs: 600,
+    exitDelayMs: 0,
+    startDelayMs: 0,
+    logDir: path.join(tmp, 'logs-spawn'),
+    exit: () => {
+      exitScheduled = true;
+    }
   });
-  check('reboot-spawn-returns-pid', typeof pid === 'number' && pid > 0, true);
-  check('reboot-exit-deferred-to-callback', exitScheduled, true);
-  await new Promise(r => setTimeout(r, 700));
+  check('reboot-spawn-returns-pid', typeof restartResult.pid === 'number' && restartResult.pid > 0, true);
+  check('reboot-health-check-passed', restartResult.alive, true);
+  await new Promise(r => setTimeout(r, 50));
+  check('reboot-exit-scheduled','exitScheduled' && exitScheduled, true);
+  await new Promise(r => setTimeout(r, 500));
   check('reboot-spawn-new-process-ran', fs.existsSync(markerFile), true);
-
-  // 默认回调会在 delayMs 后退出进程：用子进程验证真实行为
-  const rebootScript = `
-    const admin = require(${JSON.stringify(path.join(cwd, 'dist', 'features', 'admin', 'index.js'))});
-    const pid = admin.spawnReplacementProcess([process.execPath, '-e', 'setTimeout(()=>{},50)'], 30);
-    console.log('SPAWNED=' + (pid > 0));
-  `;
-  const hasAdminDist = fs.existsSync(path.join(cwd, 'dist', 'features', 'admin', 'index.js'));
-  if (hasAdminDist) {
-    const { execFileSync } = await import('node:child_process');
-    const started = Date.now();
-    const out = execFileSync(process.execPath, ['-e', rebootScript], { cwd: tmp, encoding: 'utf-8', timeout: 5000 });
-    check('reboot-process-exits-after-spawn', out.includes('SPAWNED=true'), true);
-    check('reboot-exit-within-buffer', Date.now() - started < 4000, true);
-  } else {
-    console.log('SKIP reboot-process-exits-after-spawn（无 dist 产物）');
-  }
 
   // ── 6. /reboot：argv 为空时抛错（调用方可据此提示失败，不退出） ──
   let spawnError = '';
   try {
-    admin.spawnReplacementProcess([], 0);
+    admin.buildRestartCommand(process.execPath, process.execArgv, [process.execPath]);
   } catch (error) {
     spawnError = error instanceof Error ? error.message : String(error);
   }
