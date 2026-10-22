@@ -60,6 +60,16 @@ export class EventDataManager {
     await EventDataManager.save();
   }
 
+  /**
+   * 从磁盘重新加载事件数据（/reload 用）。
+   * 现有 storage 会被磁盘内容覆盖，因此同时清空已删除的键。
+   */
+  public static async reload(): Promise<void> {
+    EventDataManager.listeners = {};
+    EventDataManager.storage = {};
+    await EventDataManager.load();
+  }
+
   private static migrateLegacyFile(): void {
     if (!fs.existsSync(EventDataManager.LEGACY_DIRECTORY)) return;
 

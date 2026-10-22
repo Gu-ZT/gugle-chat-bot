@@ -183,6 +183,34 @@ export { EMPTY_OBJECT };
 
 export type ConfigChangeSource = 'self' | 'file' | 'reload';
 
+/**
+ * 全局 ConfigStore 注册表：供 /reload 命令统一从磁盘重载全部配置。
+ *
+ * 各功能模块的 store 在模块加载时创建（部分为懒加载），没有统一入口；
+ * 这里由 ConfigStore 构造函数自动登记，避免每个模块各自暴露 reload 函数、
+ * 也避免新增配置时漏掉重载。
+ */
+const configStoreRegistry = new Set<ConfigStore<unknown>>();
+
+/** 从磁盘重载全部已登记的配置仓库，返回成功重载的数量 */
+export function reloadAllConfigStores(): number {
+  let reloaded = 0;
+  for (const store of configStoreRegistry) {
+    try {
+      store.reload('reload');
+      reloaded++;
+    } catch {
+      // 单个配置文件损坏时不影响其余配置重载
+    }
+  }
+  return reloaded;
+}
+
+/** 已登记的配置仓库数量（诊断/测试用） */
+export function configStoreCount(): number {
+  return configStoreRegistry.size;
+}
+
 export interface ConfigStoreOptions<T> extends ConfigFileOptions<T> {
   /** 是否监听文件变化自动热重载（默认 true） */
   watch?: boolean;
@@ -205,6 +233,8 @@ export class ConfigStore<T> {
     const result = readOrCreate<T>(options);
     this.data = result.data;
     if (options.watch !== false) this.watch();
+    // 登记到全局注册表，供 /reload 统一重载
+    configStoreRegistry.add(this as unknown as ConfigStore<unknown>);
   }
 
   /** 当前生效配置（内存缓存） */

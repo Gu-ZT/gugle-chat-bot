@@ -1,14 +1,17 @@
 import { Message as DiscordMessage, PermissionFlagsBits } from 'discord.js';
 import { BotCommandSource } from '@/command';
+import { isDiscordOperator } from '@/config/features';
 import { QQBot } from '@/index';
 
 const DISCORD_MESSAGE_LIMIT = 2000;
 
 /**
- * Discord 侧管理员判定：服务器拥有者，或拥有「管理服务器」/「管理员」权限的成员。
+ * Discord 侧管理员判定：服务器拥有者、拥有「管理服务器」/「管理员」权限的成员，
+ * 或 management.json 里 `discordOperators` 白名单中的用户。
  * 命令源（DiscordMsgCommandSource）与 Hermes AI（审批/技能门控）共用同一口径。
  */
 export function isDiscordAdmin(message: DiscordMessage): boolean {
+  if (isDiscordOperator(message.author.id)) return true;
   if (message.guild?.ownerId === message.author.id) return true;
   const permissions = message.member?.permissions;
   if (!permissions) return false;

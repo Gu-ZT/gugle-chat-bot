@@ -8,6 +8,7 @@ import {
   NotifyNoticeWSMSG,
   PrivateMessageWSMSG
 } from '@/type';
+import { EventDataManager } from '@/event';
 import { ParenthesesMatching } from '@/features/parentheses';
 import { Github } from '@/features/github';
 import { GitHubBindingManager } from '@/features/github/binding';
@@ -28,11 +29,15 @@ import { Bili } from '@/features/bili';
 import { Management } from '@/features/management';
 import { Welcome } from '@/features/welcome';
 import { PeakValleyTimer } from '@/features/peak-valley-timer';
+import { isRestartedByCommand, reloadRuntime, shutdownApplication, spawnReplacementProcess } from '@/features/admin';
 import { DiscordBridge } from '@/features/discord-bridge';
 import { HermesBridge } from '@/features/hermes';
 
 class CustomBot {
   private static readonly peakValleyTimer: PeakValleyTimer = PeakValleyTimer.getInstance();
+
+  /** 重启/关停在发送确认消息后的延迟，确保回执先发出再动进程 */
+  private static readonly REBOOT_CONFIRM_DELAY_MS = 500;
 
   public static helpCommand(source: CommandSource) {
     source.success(`帮助
@@ -45,6 +50,9 @@ class CustomBot {
 · /pardon <QQ号>：把用户移出黑名单（管理员）
 · /send <msg> [group|channel]：向互通的 Discord 频道/QQ 群发送消息（不填目标时发送到第一个互通条目的对端）
 · /pvtime：查询当前是梁文峰时间还是梁文谷时间
+· /reload：从磁盘重载配置与数据文件（管理员）
+· /reboot：重启应用（管理员）
+· /shutdown：关闭应用（管理员）
 以上命令均可在互通的 Discord 频道中使用（/ 或 ! 前缀），回复发在 Discord 频道
 在启用的群/互通频道 @机器人 或命中关键词即可与 AI 对话（停止 / 清除上下文 为控制指令）`);
   }
@@ -160,6 +168,69 @@ ${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings 
    * /github allow <owner|owner/repo>：把 GitHub owner 或仓库加入允许访问列表（管理员）。
    * 传入 owner 时授权其下全部仓库，传入 owner/repo 时只授权该仓库。
    */
+  /** 管理员运维命令的公共权限校验（QQ 侧 operators / Discord 侧服务器管理员） */
+  private static requireAdmin(source: CommandSource): boolean {
+    if (!isBotCommandSource(source)) {
+      source.fail('该命令仅支持在群聊或互通频道中使用');
+      return false;
+    }
+    if (!source.isAdmin()) {
+      source.fail('该命令仅限管理员使用');
+      return false;
+    }
+    return true;
+  }
+
+  /** /reload：从磁盘重载配置与数据文件 */
+  public static reloadCommand(source: CommandSource) {
+    if (!CustomBot.requireAdmin(source)) return;
+    reloadRuntime({
+      eventData: () => EventDataManager.reload(),
+      githubBindings: () => GitHubBindingManager.reload(),
+      extra: [{ name: '峰谷时段计时器', run: () => CustomBot.peakValleyTimer.reloadConfig() }]
+    })
+      .then(report => {
+        const lines = [
+          '♻️ 配置与数据已从磁盘重载',
+          `· 配置文件：${report.configStores} 个`,
+          `· 事件数据（黑名单/版本记录）：${report.eventData ? '已重载' : '失败'}`,
+          `· GitHub 绑定：${report.githubBindings ? '已重载' : '失败'}`
+        ];
+        if (report.extras.length > 0) lines.push(`· 其他模块：${report.extras.join('、')}`);
+        lines.push('· bot-config.json 中的端口/Token 需重启才生效（/reboot）');
+        source.success(lines.join('\n'));
+      })
+      .catch(error => {
+        source.fail(`重载失败：${error instanceof Error ? error.message : String(error)}`);
+      });
+  }
+
+  /** /reboot：重启应用（拉起新进程后退出当前进程） */
+  public static rebootCommand(source: CommandSource) {
+    if (!CustomBot.requireAdmin(source)) return;
+    source.success('🔄 正在重启应用，请稍候…');
+    // 先让确认消息发出去，再拉起新进程并退出（spawnReplacementProcess 内部含退出缓冲）
+    setTimeout(() => {
+      try {
+        const pid = spawnReplacementProcess();
+        bot.logger?.info(`[Admin] /reboot 由 ${source.getName()} 触发，新进程 pid=${pid}，当前进程即将退出`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        bot.logger?.error(`[Admin] /reboot 失败: ${message}`);
+        // spawn 失败：取消重启、保持当前进程运行，并告知触发者
+        source.fail(`重启失败（当前进程继续运行）：${message}`);
+      }
+    }, CustomBot.REBOOT_CONFIRM_DELAY_MS);
+  }
+
+  /** /shutdown：关闭应用 */
+  public static shutdownCommand(source: CommandSource) {
+    if (!CustomBot.requireAdmin(source)) return;
+    source.success('🛑 正在关闭应用…');
+    bot.logger?.warn(`[Admin] /shutdown 由 ${source.getName()} 触发`);
+    setTimeout(() => shutdownApplication(() => bot.stop()), CustomBot.REBOOT_CONFIRM_DELAY_MS);
+  }
+
   public static githubAllowCommand(source: CommandSource, target: string) {
     if (!isBotCommandSource(source)) {
       source.fail('GitHub allow 仅支持在群聊或互通频道中使用');
@@ -193,6 +264,11 @@ ${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings 
   public static pardonCommand(source: CommandSource, userId: string) {
     if (!isBotCommandSource(source)) {
       source.fail('只支持在群聊或互通频道中使用');
+      return;
+    }
+    // 命令层先拦一道：非管理员直接拒绝（QQ = operators 白名单；Discord = 服务器管理员或 dc 白名单）
+    if (!source.isAdmin()) {
+      source.fail('该命令仅限管理员使用');
       return;
     }
     const groupId = source.getGroupId();
@@ -355,10 +431,17 @@ ${allowedText}· 若该仓库尚未配置 webhook，请在仓库页面 Settings 
       )
     );
     command.register('gugle-command', CommandManager.literal('pvtime').execute(CustomBot.peakValleyTimeCommand));
+    // 管理员运维命令：权限在命令实现内校验（QQ operators / Discord 服务器管理员）
+    command.register('gugle-command', CommandManager.literal('reboot').execute(CustomBot.rebootCommand));
+    command.register('gugle-command', CommandManager.literal('reload').execute(CustomBot.reloadCommand));
+    command.register('gugle-command', CommandManager.literal('shutdown').execute(CustomBot.shutdownCommand));
   }
 
   @bot.subscribe('after-start', false)
   public startPeakValleyTimer(bot: QQBot): void {
+    if (isRestartedByCommand()) {
+      bot.logger?.info('[Admin] 本进程由 /reboot 拉起（上一进程已退出）');
+    }
     CustomBot.peakValleyTimer.start(bot);
     DiscordBridge.getInstance().start(bot);
     // 清理上次进程在 AI 处理中退出时残留的 QQ 表情回应（Discord 残留在 clientReady 后清理）

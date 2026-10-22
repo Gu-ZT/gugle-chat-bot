@@ -22,6 +22,23 @@ export interface FeatureConfig {
   groups: number[];
   /** 操作人白名单（如管理功能的管理员 QQ） */
   operators?: number[];
+  /**
+   * Discord 管理员白名单（Discord 用户 ID，可带 `dc:` 前缀）。
+   *
+   * 用途：桥接频道里执行管理员命令时，除「服务器拥有者/管理员权限」外，
+   * 额外允许这些用户。Discord 用户 ID 为 snowflake 字符串，不能塞进 operators（number[]）。
+   *
+   * 示例（configs/features/management.json）：
+   * ```jsonc
+   * {
+   *   "version": 1,
+   *   "groups": [703453948],
+   *   "operators": [2308465862],          // QQ 管理员
+   *   "discordOperators": ["123456789012345678"]  // Discord 管理员（可写 dc: 前缀）
+   * }
+   * ```
+   */
+  discordOperators?: string[];
   /** 其他自定义字段（如 Bili 关注列表） */
   extra?: Record<string, unknown>;
 }
@@ -213,13 +230,25 @@ function normalizeFeatureConfig(def: FeatureDefinition, raw: unknown): FeatureCo
     record.extra !== undefined && record.extra && typeof record.extra === 'object' && !Array.isArray(record.extra)
       ? (record.extra as Record<string, unknown>)
       : undefined;
+  // Discord 用户 ID：snowflake 字符串，允许带 dc: 前缀；非法项剔除
+  const discordOperators = Array.isArray(record.discordOperators)
+    ? record.discordOperators
+        .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        .map(item => normalizeDiscordUserId(item))
+    : undefined;
   const config: FeatureConfig = {
     version: def.version ?? 1,
     groups,
     ...(operators ? { operators } : {}),
+    ...(discordOperators ? { discordOperators } : {}),
     ...(extra ? { extra } : {})
   };
   return config;
+}
+
+/** 归一化 Discord 用户 ID：去掉 dc: 前缀与首尾空白，统一存裸 snowflake */
+export function normalizeDiscordUserId(raw: string): string {
+  return raw.trim().replace(/^dc:/i, '');
 }
 
 function createStore(def: FeatureDefinition): ConfigStore<FeatureConfig> {
@@ -345,6 +374,21 @@ export function isValidRepositoryOwner(owner: string): boolean {
  */
 export function isOperator(qqUserId: number): boolean {
   return getFeatureConfig('management').operators?.includes(qqUserId) ?? false;
+}
+
+/**
+ * 判断某 Discord 用户是否为管理员（配置白名单）。
+ *
+ * 与「服务器拥有者/管理员权限」互补：Discord 侧命令源用 isDiscordAdmin() 判定服务器权限，
+ * 这里额外允许 management.json 的 `discordOperators` 名单成员（便于不加服务器权限也能管理）。
+ *
+ * @param discordUserId Discord 用户 ID（裸 snowflake 或带 `dc:` 前缀）
+ */
+export function isDiscordOperator(discordUserId: string): boolean {
+  const list = getFeatureConfig('management').discordOperators;
+  if (!list || list.length === 0) return false;
+  const target = normalizeDiscordUserId(discordUserId);
+  return list.some(item => normalizeDiscordUserId(item) === target);
 }
 
 // ---------------------------------------------------------------------------

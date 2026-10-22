@@ -95,21 +95,19 @@ export class Management {
 
   /**
    * /pardon <QQ号>：把用户从黑名单移除（赦免）。
-   * 仅限 management 功能启用的群 + operators 管理员使用。
+   * 仅限 management 功能启用的群 + 管理员使用。
    *
-   * @param operatorId 操作者标识：QQ 管理员为 number（内部再校验 operators 白名单）；
-   *                   Discord 管理员为 `dc:<用户ID>` 字符串（其服务器管理员身份已在
-   *                   命令源层校验，这里仅做格式校验，字符串必须带 dc: 前缀）
-   * @returns 返回是否成功赦免（true=已移除；false=不在黑名单/无权限）
+   * 权限校验（**全部在此处完成**，不依赖调用方）：
+   * - QQ 侧 operatorId 为 number → 必须在 management.json `operators` 白名单内；
+   * - Discord 侧 operatorId 为 `dc:<用户ID>` → 必须是 management.json `discordOperators`
+   *   白名单成员。注意：此前仅校验 `dc:` 前缀即放行，导致被桥接频道里任意成员都能赦免黑名单用户。
+   *
+   * @returns true=已移除；false=不在黑名单/无权限
    */
   public static async pardon(groupId: number, operatorId: number | string, userId: number): Promise<boolean> {
     const config = getFeatureConfig('management');
     if (!config.groups.includes(groupId)) return false;
-    if (typeof operatorId === 'number') {
-      if (!config.operators?.includes(operatorId)) return false;
-    } else if (!operatorId.startsWith('dc:')) {
-      return false;
-    }
+    if (!this.isOperatorAllowed(operatorId)) return false;
 
     // 黑名单历史数据/不同 OneBot 实现可能写入字符串形态的 QQ 号，
     // 统一按数值比较，避免「明明在黑名单里却删不掉」。
@@ -119,6 +117,26 @@ export class Management {
     const next = banList.filter(id => id !== userId);
     await EventDataManager.setStorage('management', 'ban_list', next);
     return true;
+  }
+
+  /**
+   * 操作者是否有权执行管理操作。
+   *
+   * - number（QQ 号）→ operators 白名单；
+   * - `dc:` 前缀 → discordOperators 白名单（必须是显式配置的用户）；
+   * - 其他形态 → 拒绝。
+   */
+  public static isOperatorAllowed(operatorId: number | string): boolean {
+    const config = getFeatureConfig('management');
+    if (typeof operatorId === 'number') {
+      return config.operators?.includes(operatorId) ?? false;
+    }
+    if (typeof operatorId === 'string' && /^dc:/i.test(operatorId)) {
+      const target = operatorId.slice(3).trim();
+      if (!target) return false;
+      return (config.discordOperators ?? []).some(item => item.replace(/^dc:/i, '').trim() === target);
+    }
+    return false;
   }
 
   /**

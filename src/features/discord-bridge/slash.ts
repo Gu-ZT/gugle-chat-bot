@@ -8,6 +8,7 @@ import {
 } from 'discord.js';
 import { Arguments, CommandManager, CommandNode } from 'gugle-command';
 import { BotCommandSource, executeCommandTokens } from '@/command';
+import { isDiscordOperator } from '@/config/features';
 import { QQBot } from '@/index';
 
 /**
@@ -52,6 +53,9 @@ const DESCRIPTIONS: Record<string, string> = {
   wiki: '搜索 Minecraft 维基',
   github: 'GitHub 绑定/订阅/授权',
   pardon: '把用户移出黑名单（管理员）',
+  reload: '重载配置与数据文件（管理员）',
+  reboot: '重启应用（管理员）',
+  shutdown: '关闭应用（管理员）',
   pvtime: '查询当前是梁文峰时间还是梁文谷时间',
   bind: '绑定 GitHub 用户名',
   subscribe: '订阅仓库消息推送',
@@ -243,6 +247,7 @@ export class DiscordInteractionCommandSource implements BotCommandSource {
   }
 
   public isAdmin(): boolean {
+    if (isDiscordOperator(this.interaction.user.id)) return true;
     if (this.interaction.guild?.ownerId === this.interaction.user.id) return true;
     const permissions = this.interaction.memberPermissions;
     if (!permissions) return false;

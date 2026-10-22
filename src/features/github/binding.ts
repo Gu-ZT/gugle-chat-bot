@@ -113,6 +113,11 @@ export class GitHubBindingManager {
     );
   }
 
+  /** 重新从磁盘加载绑定数据（/reload 用；清空内存缓存后懒加载） */
+  public static reload(): void {
+    GitHubBindingManager.bindings = undefined;
+  }
+
   private static load(): GitHubBindings {
     if (GitHubBindingManager.bindings) return GitHubBindingManager.bindings;
 

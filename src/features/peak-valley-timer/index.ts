@@ -264,17 +264,32 @@ export class PeakValleyTimer {
     return PeakValleyTimer.instance;
   }
 
-  private readonly groups: number[];
-  private readonly mode: PeakValleyMode;
-  private readonly time: NormalizedTimeRange[];
-  private readonly peakMsg: string;
-  private readonly valleyMsg: string;
-  private readonly cmdPeakMsg: string;
-  private readonly cmdValleyMsg: string;
+  private groups: number[];
+  private mode: PeakValleyMode;
+  private time: NormalizedTimeRange[];
+  private peakMsg: string;
+  private valleyMsg: string;
+  private cmdPeakMsg: string;
+  private cmdValleyMsg: string;
   private readonly reportedToday: Set<string> = new Set();
   private timer: NodeJS.Timeout | undefined = undefined;
 
   public constructor() {
+    const config = loadConfig();
+    this.groups = config.groups;
+    this.mode = config.mode;
+    this.time = config.time;
+    this.peakMsg = config.peak_msg;
+    this.valleyMsg = config.valley_msg;
+    this.cmdPeakMsg = config.cmd_peak_msg;
+    this.cmdValleyMsg = config.cmd_valley_msg;
+  }
+
+  /**
+   * 从磁盘重新读取配置（/reload 用）。
+   * 本类在构造时把配置读进字段（非 ConfigStore 热重载），故需显式重载入口。
+   */
+  public reloadConfig(): void {
     const config = loadConfig();
     this.groups = config.groups;
     this.mode = config.mode;
